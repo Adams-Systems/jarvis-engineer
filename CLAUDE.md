@@ -9,7 +9,8 @@ set of content, in two kits: `agent/claude/` for Claude Code and `agent/codex/` 
 orchestrator persona plus seven sub-agents — coder, refactorer, reviewer, expert, investigator,
 planner, and architect — and an `sbx` sandbox spec (`spec.yaml`) that provisions the sandbox:
 network allowlist, an `ai-memory` MCP server on a persistent volume, and a read-only MySQL MCP
-server reached on the host.
+server reached on the host. The Claude kit adds three specialized reviewers (security, code,
+database) that replace `jarvis-reviewer` there; the Codex kit does not have them.
 
 The roles, rules and skills of both kits are generated from `shared/` (see "Source of truth"
 below). The design is recorded in `docs/architecture/agent-centralization.md` (ADR) and
@@ -144,9 +145,28 @@ after use, so a server that ignores SIGTERM cannot hang sandbox startup. Nothing
 
 The kit extends the built-in `claude` sandbox, points `sandbox.image` at
 `jarvis-engineer:claude`, and appends the orchestrator persona as the system prompt
-(`--append-system-prompt-file /home/agent/ROLE.md`). The seven sub-agents are Claude Code
+(`--append-system-prompt-file /home/agent/ROLE.md`). The ten sub-agents are Claude Code
 sub-agents in `files/home/.claude/agents/`, the always-on rules are in `.claude/rules/`, and the
 skills in `.claude/skills/`.
+
+Review on Claude Code is a fan-out, not one generalist pass. `shared/role/delegation.claude.md`
+(appended to `ROLE.md`) tells the orchestrator not to use `jarvis-reviewer`, and carries a shell
+probe that picks the reviewers from the diff: `jarvis-security-reviewer` (pinned to `opus`) and
+`jarvis-code-reviewer` on every diff that is not docs-only (agent, skill, rule and role markdown
+never counts as docs), plus `jarvis-database-reviewer` (preloads `sql-code-review` and
+`sql-optimization`) when a changed path or an added or removed line looks like SQL. The probe's
+base is the merge-base with the default branch (`origin/HEAD`, then `origin/main`, then
+`origin/master`), then with `@{upstream}`, so pushed branch commits are still reviewed; when it
+falls back to `HEAD` it says committed changes are not reviewed. The reviewers run in parallel and the
+orchestrator merges their findings by owner. The `implement-review-loop` workflow does the same in
+JS: a low-effort `general-purpose` agent runs the same probe (base, git's file list, SQL matches),
+routing uses git's file list together with the coder's, `parallel()` runs the selected reviewers,
+and a round is approved only when every reviewer returns `approved` with no findings (a reviewer
+that returns nothing counts as a rejection; a probe that returns nothing runs all three). The
+probe text in `delegation.claude.md` and the workflow's `BASE_PROBE`, `SQL_CONTENT_PROBE`,
+`SQL_PATH`, `DOCS_PATH` and `INSTRUCTION_PATH` are copies of one rule set: change them together. Its `agentType` values are the frontmatter names (`jarvis-coder`,
+`jarvis-security-reviewer`, ...): the workflow resolves them from the Agent tool's registry, which
+keys agents by `name`.
 
 Two things about the agent files are worth knowing before editing them:
 
@@ -157,7 +177,9 @@ Two things about the agent files are worth knowing before editing them:
 - Five sub-agents are read-only (`jarvis-reviewer`, `jarvis-investigator`, `jarvis-planner`,
   `jarvis-expert`, `jarvis-architect`) **by prompt only**. The spec grants one unrestricted tool
   set; nothing at the sandbox layer stops those agents from editing files. Treat "read-only" in a
-  description as intent, not a guarantee.
+  description as intent, not a guarantee. The three specialized reviewers carry
+  `disallowedTools: Write, Edit, NotebookEdit, Agent`, which removes those tools but keeps `Bash`
+  (they need `git diff` and tests), so they can still write through a shell.
 
 The kit also ships `files/home/.jarvis-role` (`ENGINEER`), which is the static role label the
 status line renders. It is a file rather than an `environment.variables` entry because
@@ -311,6 +333,16 @@ the targets differ):
 - The five read-only sub-agents are prompt-enforced only; see the note under "Kit" above. If the
   `sbx` spec schema grows tool allow/deny support, they should be denied `Edit`/`Write`. The same
   holds on Codex: a sub-agent with `sandbox_mode = "read-only"` still wrote files in the spike.
+  The three specialized reviewers deny `Edit`/`Write` through `disallowedTools`, but `Bash` can
+  still write (`sed -i`, redirects); closing that needs a PreToolUse hook, which the flat
+  frontmatter allowlist cannot express.
+- The specialized reviewers are Claude-only (`targets: claude`). Codex still has the single
+  `jarvis-reviewer`, and `jarvis-reviewer`'s description still mentions security, so Claude's
+  auto-delegation could pick it; only the instruction in `ROLE.md` steers away from it. Whether
+  the built-in `security-review` is reachable through the Skill tool inside a sub-agent is
+  unverified, and it reviews only `origin/HEAD...`; the security reviewer therefore always runs its
+  own checklist on `git diff <base>` plus untracked files and treats `security-review` as an
+  optional extra pass.
 - The Codex kit has no plugins, no status line and no workflows (`.claude/workflows/` is not
   ported). `trust-codex-hooks` depends on the app-server's `hooks/list` and `config/batchWrite`
   methods; a Codex release that renames them turns memory capture off (the step warns) and turns

@@ -17,6 +17,9 @@ cd "$(dirname "$0")/.."
 CONFIG=config.json
 PLUGIN_COUNT="$(jq -r '.plugins | length' "$CONFIG")"
 
+# The kit's generated content, compared with what the sandbox received.
+KIT_HOME=agent/claude/files/home
+
 SANDBOX="${1:-}"
 if [[ -z "$SANDBOX" ]]; then
 	printf 'usage: %s <sandbox-name>\n\n' "$0" >&2
@@ -151,6 +154,17 @@ check 'status line renders the kit role label' \
 check 'superpowers skills are readable in the sandbox' \
 	'brainstorming' \
 	'ls /home/agent/.claude/plugins/cache/claude-plugins-official/superpowers/*/skills'
+
+# --- sub-agents ---------------------------------------------------------
+# sbx copies files/home into the sandbox; a stale or partial copy would leave
+# the review fan-out in ROLE.md pointing at reviewers that are not there.
+check 'every sub-agent file is in place' \
+	"$(cd "$KIT_HOME/.claude/agents" && ls | sort | paste -sd ' ' -)" \
+	'cd /home/agent/.claude/agents && ls | sort | paste -sd " " -'
+
+check 'specialized reviewers carry their disallowedTools line' \
+	'restricted=3' \
+	'cd /home/agent/.claude/agents && echo "restricted=$(grep -l "^disallowedTools: " security-reviewer.md code-reviewer.md database-reviewer.md 2>/dev/null | wc -l | tr -d " ")"'
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]
