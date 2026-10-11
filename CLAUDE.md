@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this repository is
 
 `jarvis-engineer` builds Docker sandbox **template images** for running an engineer agent from one
-set of content, in two kits: `agent/` for Claude Code and `agent-codex/` for Codex. Both carry an
+set of content, in two kits: `agent/claude/` for Claude Code and `agent/codex/` for Codex. Both carry an
 orchestrator persona plus seven sub-agents — coder, refactorer, reviewer, expert, investigator,
 planner, and architect — and an `sbx` sandbox spec (`spec.yaml`) that provisions the sandbox:
 network allowlist, an `ai-memory` MCP server on a persistent volume, and a read-only MySQL MCP
@@ -37,7 +37,7 @@ Makefile stops at parse time with `usage: make <verb> claude|codex`. Bare `make`
   `Dockerfile`, `--target <agent>`)
 - `make verify-image claude|codex` — static acceptance checks against the built image
   (`scripts/verify-image-claude.sh` / `scripts/verify-image-codex.sh`)
-- `make verify-kits` — static acceptance checks against every `agent*/spec.yaml` (`scripts/verify-kits.sh`)
+- `make verify-kits` — static acceptance checks against every `agent/*/spec.yaml` (`scripts/verify-kits.sh`)
 - `make sync` — regenerate both kits' content from `shared/` (`scripts/sync-agents.sh`)
 - `make verify-sync` — generator tests, then fail if the committed kit content differs from `shared/`
 - `make verify-make` — tests for the Makefile's agent dispatch (`scripts/test-make-dispatch.sh`); it
@@ -46,7 +46,7 @@ Makefile stops at parse time with `usage: make <verb> claude|codex`. Bare `make`
 - `make template claude|codex` — build + verify the image, then save/load it into `sbx` as a
   reusable template
 - `make sandbox claude|codex [SANDBOX=name]` — (re)create a named sandbox from the agent's kit
-  (`agent/` or `agent-codex/`; default names `jarvis-engineer` / `jarvis-engineer-codex`), reading
+  (`agent/claude/` or `agent/codex/`; default names `jarvis-engineer` / `jarvis-engineer-codex`), reading
   MySQL credentials from `.env`, then run `scripts/verify-sandbox-claude.sh` /
   `scripts/verify-sandbox-codex.sh` against it
 - `make verify-sandbox claude|codex [SANDBOX=name]` — live checks against an already-running sandbox
@@ -71,7 +71,7 @@ Running the verify scripts directly:
 `trust-codex-hooks.js`); a new script the `Dockerfile` `COPY`s fails the build with "not found" until it
 is listed there too.
 
-Under Claude Code's macOS Seatbelt sandbox, writes into `agent/files/home/.claude/` are denied, so
+Under Claude Code's macOS Seatbelt sandbox, writes into `agent/claude/files/home/.claude/` are denied, so
 `make sync` has to run outside it; the generator exits 2 (it used to report success) when it
 cannot write a kit path.
 
@@ -140,7 +140,7 @@ break it silently; any other hook still goes through Codex's review. It lets go 
 after use, so a server that ignores SIGTERM cannot hang sandbox startup. Nothing Claude-specific
 (plugins, status line) is built into this target.
 
-### Kit (`agent/spec.yaml` + `agent/files/home/`)
+### Kit (`agent/claude/spec.yaml` + `agent/claude/files/home/`)
 
 The kit extends the built-in `claude` sandbox, points `sandbox.image` at
 `jarvis-engineer:claude`, and appends the orchestrator persona as the system prompt
@@ -166,7 +166,7 @@ reads as drift.
 `$JARVIS_ROLE` overrides it; with neither, the line falls back to `AGENT`.
 
 The network allowlist is a base block that every kit must carry plus `registry.npmjs.org` /
-`registry.yarnpkg.com` for dependency resolution; `agent/` carries both. `verify-kits.sh` asserts
+`registry.yarnpkg.com` for dependency resolution; `agent/claude/` carries both. `verify-kits.sh` asserts
 the base is complete per kit, because the `permissions:` block sits above the shared block and is
 invisible to the drift comparison.
 
@@ -194,14 +194,14 @@ Codex kit carries its own variant of it, described under "Codex kit" below:
   which no-ops with a warning (never a hard failure — a non-zero startup step silently aborts every
   later step) if `MYSQL_USER` or the `claude` CLI isn't available
 
-`scripts/verify-kits.sh` finds every kit by globbing `agent*/spec.yaml` and keys its cases on the
+`scripts/verify-kits.sh` finds every kit by globbing `agent/*/spec.yaml` and keys its cases on the
 spec's `extends:` (the family: `claude` or `codex`). It diffs this shared block within a family, so
 drift between copies fails CI-style rather than silently diverging; with one kit per family that
 comparison is vacuous for now. Across families it compares only what must match: the
 `AI_MEMORY_DATA_DIR` value, the volume, the serve bind address, the readiness text, the chown step,
 and no `MYSQL_*` in `environment`.
 
-### Codex kit (`agent-codex/spec.yaml` + `agent-codex/files/home/`)
+### Codex kit (`agent/codex/spec.yaml` + `agent/codex/files/home/`)
 
 `extends: codex`, `sandbox.image: jarvis-engineer:codex`. The built-in `codex` kit's
 entrypoint is already `codex --dangerously-bypass-approvals-and-sandbox` and the kit's `command` is
@@ -228,14 +228,14 @@ waits on stdin forever unless it gets `</dev/null`.
 ### Source of truth (`shared/`)
 
 `shared/` is the hand-edited source for both kits' content; `scripts/sync-agents.sh` generates
-`agent/files/home/{ROLE.md,.claude/agents,.claude/rules,.claude/skills}` and
-`agent-codex/files/home/{.codex/AGENTS.md,.codex/agents,.agents/skills,.jarvis/rules}` from it.
+`agent/claude/files/home/{ROLE.md,.claude/agents,.claude/rules,.claude/skills}` and
+`agent/codex/files/home/{.codex/AGENTS.md,.codex/agents,.agents/skills,.jarvis/rules}` from it.
 Those paths are generated and committed — never hand-edit them. Edit `shared/`, run `make sync`,
 and commit both. CI runs `sync-agents.sh --check`, which regenerates into a temp dir and fails on
 any extra, missing or changed file in the owned paths. Everything else in a kit (`spec.yaml`,
 `.jarvis-role`, `.claude/settings.json`, `.claude/workflows/`) is hand-owned and never touched.
 
-The repo `.gitignore` negates `/agent-codex/files/home/.agents/`: a user-global ignore of `.agents`
+The repo `.gitignore` negates `/agent/codex/files/home/.agents/`: a user-global ignore of `.agents`
 would otherwise keep the generated Codex skills out of the commit and fail `--check` in CI.
 
 - `shared/role/ROLE.md` (target-neutral core) + `shared/role/delegation.claude.md` are
@@ -311,5 +311,5 @@ the targets differ):
   ported). `trust-codex-hooks` depends on the app-server's `hooks/list` and `config/batchWrite`
   methods; a Codex release that renames them turns memory capture off (the step warns) and turns
   `verify-image-codex.sh` red.
-- `gpt-5.6-terra` in `agent-codex/spec.yaml` is what the current ChatGPT account accepts, not a
+- `gpt-5.6-terra` in `agent/codex/spec.yaml` is what the current ChatGPT account accepts, not a
   property of the kit; change it there if the account or Codex's model list changes.

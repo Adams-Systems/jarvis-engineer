@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Live acceptance checks against a running Codex sandbox (agent-codex kit).
+# Live acceptance checks against a running Codex sandbox (agent/codex kit).
 #
 # The agent-neutral cases (ai-memory, MySQL, nested Docker) are copied from
 # verify-sandbox-claude.sh rather than shared: that script has no CI coverage, so
@@ -18,7 +18,7 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 
-KIT_HOME=agent-codex/files/home
+KIT_HOME=agent/codex/files/home
 CODEX=/usr/local/share/npm-global/bin/codex
 
 SANDBOX="${1:-}"

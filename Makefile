@@ -22,8 +22,8 @@ endif
 endif
 
 # Per-agent facts: the kit directory and the default sandbox name.
-KIT_claude     := agent
-KIT_codex      := agent-codex
+KIT_claude     := agent/claude
+KIT_codex      := agent/codex
 SANDBOX_claude := jarvis-engineer
 SANDBOX_codex  := jarvis-engineer-codex
 
@@ -64,7 +64,7 @@ sandbox:
 	sbx create --name $(SANDBOX) --env-file .env --kit $(KIT) $(KIT_SPEC_NAME) .
 	./scripts/verify-sandbox-$(AGENT).sh $(SANDBOX)
 
-## sync: regenerate the kit content of agent/ and agent-codex/ from shared/
+## sync: regenerate the kit content of agent/claude/ and agent/codex/ from shared/
 sync:
 	./scripts/sync-agents.sh
 
@@ -85,7 +85,7 @@ verify-make:
 verify-image:
 	./scripts/verify-image-$(AGENT).sh $(IMAGE)
 
-## verify-kits: static acceptance checks against every agent*/spec.yaml
+## verify-kits: static acceptance checks against every agent/*/spec.yaml
 verify-kits:
 	./scripts/verify-kits.sh
 

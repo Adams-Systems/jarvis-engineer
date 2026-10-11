@@ -134,7 +134,7 @@ setup:
     # unless told to: `env_vars` forwards the credentials by name from the
     # sandbox environment, so no credential value is ever written into
     # ~/.codex/config.toml. Supply them at creation time:
-    #   sbx create --env-file .env --kit agent-codex jarvis-engineer-codex .
+    #   sbx create --env-file .env --kit agent/codex jarvis-engineer-codex .
     # Written as TOML directly because `codex mcp add` can only set values.
     - command:
         - "sh"

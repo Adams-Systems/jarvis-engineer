@@ -7,4 +7,4 @@ docs/
 # Generated Codex kit skills. A user-global ignore of .agents (common for
 # agent tooling) would otherwise keep them out of the commit and fail
 # sync-agents.sh --check in CI.
-!/agent-codex/files/home/.agents/
+!/agent/codex/files/home/.agents/

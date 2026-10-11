@@ -94,17 +94,17 @@ expect "template claude names its tarball after the agent" \
 expect "template claude verifies the image it built" \
 	"./scripts/verify-image-claude.sh jarvis-engineer:claude" \
 	"$(dry template claude)"
-expect "sandbox claude recreates the default sandbox from the agent kit" \
-	"sbx create --name jarvis-engineer --env-file .env --kit agent jarvis-engineer ." \
+expect "sandbox claude recreates the default sandbox from the claude kit" \
+	"sbx create --name jarvis-engineer --env-file .env --kit agent/claude jarvis-engineer ." \
 	"$(dry sandbox claude)"
 expect "sandbox claude verifies the sandbox it created" \
 	"./scripts/verify-sandbox-claude.sh jarvis-engineer" \
 	"$(dry sandbox claude)"
 expect "sandbox codex recreates the codex sandbox from the codex kit" \
-	"sbx create --name jarvis-engineer-codex --env-file .env --kit agent-codex jarvis-engineer-codex ." \
+	"sbx create --name jarvis-engineer-codex --env-file .env --kit agent/codex jarvis-engineer-codex ." \
 	"$(dry sandbox codex)"
 expect "SANDBOX still overrides the default sandbox name" \
-	"sbx create --name probe --env-file .env --kit agent-codex jarvis-engineer-codex ." \
+	"sbx create --name probe --env-file .env --kit agent/codex jarvis-engineer-codex ." \
 	"$(dry sandbox codex SANDBOX=probe)"
 expect "SANDBOX override reaches the live verifier" \
 	"./scripts/verify-sandbox-codex.sh probe" \

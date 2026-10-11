@@ -2,7 +2,7 @@
 #
 # Acceptance tests for scripts/sync-agents.sh, the generator that turns the
 # hand-edited shared/ tree into the committed kit content under
-# agent/files/home (Claude) and agent-codex/files/home (Codex).
+# agent/claude/files/home (Claude) and agent/codex/files/home (Codex).
 #
 # Every case builds its own fixture (a shared/ tree plus a kit with hand-owned
 # files) in a fresh temp directory, runs the generator against it with --root,
@@ -31,8 +31,8 @@ pass=0
 fail=0
 case_seq=0
 
-KIT_HOME=agent/files/home
-CODEX_HOME=agent-codex/files/home
+KIT_HOME=agent/claude/files/home
+CODEX_HOME=agent/codex/files/home
 
 # Fixture sources, as printf %b strings. Two of them deliberately end without
 # a newline: real sources do (ROLE.md, planner.md, two rules, two skills), and
@@ -85,11 +85,11 @@ make_fixture() {
 	put "$fx/shared/rules/scoped.md" "$SRC_RULE_SCOPED"
 	put "$fx/shared/skills/demo/SKILL.md" "$SRC_SKILL"
 	put "$fx/shared/skills/demo/ref/notes.txt" "$SRC_SKILL_REF"
-	put "$fx/agent/spec.yaml" "$HAND_SPEC"
+	put "$fx/agent/claude/spec.yaml" "$HAND_SPEC"
 	put "$fx/$KIT_HOME/.jarvis-role" "$HAND_ROLE_LABEL"
 	put "$fx/$KIT_HOME/.claude/settings.json" "$HAND_SETTINGS"
 	put "$fx/$KIT_HOME/.claude/workflows/x.js" "$HAND_WORKFLOW"
-	put "$fx/agent-codex/spec.yaml" "$HAND_CODEX_SPEC"
+	put "$fx/agent/codex/spec.yaml" "$HAND_CODEX_SPEC"
 	put "$fx/$CODEX_HOME/.jarvis-role" "$HAND_ROLE_LABEL"
 }
 
@@ -110,8 +110,8 @@ tree_sum() {
 
 # kits_sum <fixture> -- tree_sum of both kits.
 kits_sum() {
-	tree_sum "$1/agent"
-	tree_sum "$1/agent-codex"
+	tree_sum "$1/agent/claude"
+	tree_sum "$1/agent/codex"
 }
 
 # ---- assertion helpers: return 0 on success, print the reason otherwise ----
@@ -309,11 +309,11 @@ failed_write_is_an_error() {
 hand_owned_untouched() {
 	gen "$1"
 	expect_rc 0 || return 1
-	expect_bytes "$1/agent/spec.yaml" "$HAND_SPEC" &&
+	expect_bytes "$1/agent/claude/spec.yaml" "$HAND_SPEC" &&
 		expect_bytes "$1/$KIT_HOME/.jarvis-role" "$HAND_ROLE_LABEL" &&
 		expect_bytes "$1/$KIT_HOME/.claude/settings.json" "$HAND_SETTINGS" &&
 		expect_bytes "$1/$KIT_HOME/.claude/workflows/x.js" "$HAND_WORKFLOW" &&
-		expect_bytes "$1/agent-codex/spec.yaml" "$HAND_CODEX_SPEC" &&
+		expect_bytes "$1/agent/codex/spec.yaml" "$HAND_CODEX_SPEC" &&
 		expect_bytes "$1/$CODEX_HOME/.jarvis-role" "$HAND_ROLE_LABEL"
 }
 
@@ -352,12 +352,12 @@ check_detects_in() {
 check_ignores_hand_owned() {
 	gen "$1"
 	expect_rc 0 || return 1
-	printf 'edited\n' >>"$1/agent/spec.yaml"
+	printf 'edited\n' >>"$1/agent/claude/spec.yaml"
 	printf 'edited\n' >>"$1/$KIT_HOME/.jarvis-role"
 	printf 'edited\n' >>"$1/$KIT_HOME/.claude/settings.json"
 	printf 'edited\n' >>"$1/$KIT_HOME/.claude/workflows/x.js"
 	put "$1/$KIT_HOME/.claude/workflows/new.js" 'new\n'
-	printf 'edited\n' >>"$1/agent-codex/spec.yaml"
+	printf 'edited\n' >>"$1/agent/codex/spec.yaml"
 	printf 'edited\n' >>"$1/$CODEX_HOME/.jarvis-role"
 	gen "$1" --check
 	expect_rc 0

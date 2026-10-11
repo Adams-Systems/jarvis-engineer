@@ -5,8 +5,8 @@
 # shared/ is the single source of truth for the orchestrator role, the
 # sub-agents, the rules and the skills. This script is a pure function from
 # shared/ to the subtrees it owns in each kit (CLAUDE_OWNED under
-# agent/files/home, CODEX_OWNED under agent-codex/files/home); everything else
-# in a kit is hand-owned and never read or written.
+# agent/claude/files/home, CODEX_OWNED under agent/codex/files/home);
+# everything else in a kit is hand-owned and never read or written.
 #
 # Sources use a flat YAML frontmatter subset: `key: value` lines only, no
 # nesting, no block scalars, keys from an allowlist. Anything else is rejected
@@ -32,8 +32,8 @@ export LC_ALL=C
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-CLAUDE_HOME=agent/files/home
-CODEX_HOME=agent-codex/files/home
+CLAUDE_HOME=agent/claude/files/home
+CODEX_HOME=agent/codex/files/home
 
 # The kit paths this script owns, relative to each kit home.
 CLAUDE_OWNED="ROLE.md .claude/agents .claude/rules .claude/skills"

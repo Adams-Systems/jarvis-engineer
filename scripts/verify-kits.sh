@@ -18,10 +18,10 @@ cd "$(dirname "$0")/.."
 
 # Discovered rather than listed: a hardcoded pair is how two kits ended up
 # carrying the shared ai-memory block with nothing checking it. A new kit is
-# covered the moment its spec lands. `agent*` matches agent/ and any
-# agent-<target>/ kit next to it.
+# covered the moment its spec lands. `agent/*` matches agent/claude/,
+# agent/codex/ and any agent/<target>/ kit next to them.
 KITS=()
-for spec in agent*/spec.yaml; do
+for spec in agent/*/spec.yaml; do
 	KITS+=("$(dirname "$spec")")
 done
 
@@ -84,8 +84,8 @@ missing_base() {
 # kit is the engineer orchestrator, not an "AGENT"; any other kit keeps the
 # label derived from its directory name.
 role_label() {
-	case "$(basename "$1")" in
-	agent) printf 'ENGINEER' ;;
+	case "$1" in
+	agent/claude) printf 'ENGINEER' ;;
 	*) basename "$1" | tr '[:lower:]' '[:upper:]' ;;
 	esac
 }
