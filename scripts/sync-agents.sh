@@ -15,9 +15,10 @@
 # must stay byte-exact.
 #
 # Codex gets each agent as TOML whose developer_instructions is the body plus
-# the rules the agent declares, an AGENTS.md built from the role core, the
-# Codex delegation fragment and an index of the rules, and the rules
-# themselves (frontmatter stripped) under ~/.jarvis/rules.
+# the rules the agent declares (an agent marked `targets: claude` gets none),
+# an AGENTS.md built from the role core, the Codex delegation fragment and an
+# index of the rules, and the rules themselves (frontmatter stripped) under
+# ~/.jarvis/rules.
 #
 # Usage: scripts/sync-agents.sh [--check] [--root DIR]
 #   --root DIR  directory holding shared/ and the kits (default: repo root)
@@ -50,7 +51,9 @@ AGENTS_MD_BUDGET=16384
 # Agent frontmatter keys. Widen deliberately: a key that reaches a target
 # unreviewed is how a guess becomes a contract. codex.sandbox_mode is left out
 # on purpose: Codex does not enforce it per agent under sbx (spike S6).
-AGENT_KEYS="name description rules claude.model claude.skills codex.model_reasoning_effort"
+# `targets: claude` is generator metadata, never emitted: the agent gets only
+# its Claude file (Claude is the only valid value).
+AGENT_KEYS="name description rules targets claude.model claude.skills claude.disallowedTools codex.model_reasoning_effort"
 AGENT_REQUIRED="name description"
 
 SKILL_KEYS="name description"
@@ -109,7 +112,7 @@ frontmatter_close() {
 			if (sep < 2) fail("not a flat key: value line")
 			key = substr($0, 1, sep - 1)
 			value = substr($0, sep + 1)
-			if (key !~ /^[a-z][a-z0-9_.-]*$/) fail("not a flat key: value line")
+			if (key !~ /^[a-z][a-zA-Z0-9_.-]*$/) fail("not a flat key: value line")
 			if (value !~ /^ / && value != "") fail("missing space after " key ":")
 			sub(/^ +/, "", value)
 			sub(/[ \t]+$/, "", value)
@@ -249,8 +252,12 @@ validate_rule() {
 }
 
 # emit_agent <shared-relative path> <Claude output file> <Codex agents dir>
+#
+# Agent names are unique across every agent, whatever its targets: Claude keys
+# sub-agents by name and Codex names the TOML file after it. $AGENT_NAMES holds
+# the names seen so far in this build.
 emit_agent() {
-	local rel="$1" src="$SHARED/$1" close keys name quoted
+	local rel="$1" src="$SHARED/$1" close keys name quoted targets
 	if ! close="$(frontmatter_close "$src" flat "$AGENT_KEYS" "$AGENT_REQUIRED")"; then
 		invalid "$rel" "$close"
 		return 1
@@ -276,18 +283,25 @@ emit_agent() {
 		invalid "$rel" "quoted value for $quoted is not supported (it would reach Codex with its quotes)"
 		return 1
 	fi
-	if [[ -e "$3/$name.toml" ]]; then
+	if grep -qxF -- "$name" "$AGENT_NAMES"; then
 		invalid "$rel" "another agent is already named $name"
+		return 1
+	fi
+	printf '%s\n' "$name" >>"$AGENT_NAMES"
+	targets="$(key_value "$keys" targets)"
+	if [[ -n "$targets" && "$targets" != claude ]]; then
+		invalid "$rel" "targets must be claude (got $targets)"
 		return 1
 	fi
 
 	{
 		printf -- '---\n'
 		# `rules` has no Claude consumer (Claude loads ~/.claude/rules
-		# globally); claude.<k> is emitted as <k>; codex.<k> is not Claude's.
+		# globally); `targets` is ours; claude.<k> is emitted as <k>;
+		# codex.<k> is not Claude's.
 		awk '{
 			key = substr($0, 1, index($0, ":") - 1)
-			if (key == "rules" || key ~ /^codex\./) next
+			if (key == "rules" || key == "targets" || key ~ /^codex\./) next
 			if (key ~ /^claude\./) $0 = substr($0, 8)
 			print
 		}' "$keys"
@@ -296,6 +310,7 @@ emit_agent() {
 		tail -n +"$((close + 1))" "$src"
 	} >"$2"
 
+	[[ "$targets" == claude ]] && return 0
 	emit_codex_agent "$rel" "$close" "$keys" "$3/$name.toml"
 }
 
@@ -443,6 +458,9 @@ build() {
 		"$codex/.codex/agents" "$codex/.agents/skills" "$codex/.jarvis/rules"
 
 	emit_role "$claude/ROLE.md" || status=1
+
+	AGENT_NAMES="$WORK/agent-names"
+	: >"$AGENT_NAMES"
 
 	# Rules first: agents inline them, and the index lists them.
 	for src in "$SHARED"/rules/*.md; do

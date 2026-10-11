@@ -246,12 +246,16 @@ would otherwise keep the generated Codex skills out of the commit and fail `--ch
 - `shared/agents/<role>.md` → `.claude/agents/<role>.md` and `.codex/agents/<name>.toml`.
   Frontmatter is a flat subset only (`key: value`, no nesting, no block scalars) with an allowlist:
   `name`, `description` (required), `rules` (bare rule names; dropped for Claude, which loads every
-  rule; inlined for Codex), `claude.model`, `claude.skills` (Claude `model:` / `skills:`),
-  `codex.model_reasoning_effort` (Codex only). `codex.sandbox_mode` is deliberately not allowed:
+  rule; inlined for Codex), `claude.model`, `claude.skills`, `claude.disallowedTools` (Claude
+  `model:` / `skills:` / `disallowedTools:`), `codex.model_reasoning_effort` (Codex only), and
+  `targets: claude` (generator metadata, never emitted: the agent gets its Claude file and no Codex
+  TOML; `claude` is the only accepted value). Names are unique across all agents whatever their
+  targets. `codex.sandbox_mode` is deliberately not allowed:
   the spike showed Codex does not enforce it per agent under sbx. Anything else is rejected, as are
   quoted values for keys that reach Codex, control characters, duplicate names, and names outside
   `[a-z0-9-]` (the name is the TOML file stem). Neutral sources (`agents/*.md`, `role/ROLE.md`)
-  must not mention `.claude/` or `subagent_type`.
+  must not mention `.claude/` or `subagent_type`; that includes `targets: claude` agents, so a later
+  Codex port needs no body edits.
 - Codex TOML: `name`, `description`, the `codex.*` keys, and `developer_instructions` = the body
   plus each declared rule (frontmatter stripped) in declared order, one blank line between parts,
   as a multi-line basic string with `\` and `"""` escaped.
