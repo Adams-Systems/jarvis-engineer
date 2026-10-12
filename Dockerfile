@@ -5,9 +5,11 @@
 # one of them needs. The two bases differ, so Docker builds `common` once per
 # agent: what is shared is the source of those layers, not their cache.
 #
-# AGENT has no default on purpose: a build that forgets it fails on the blank
-# base name instead of silently building on the wrong base.
-ARG AGENT
+# AGENT defaults to `missing` rather than to an agent: a build that forgets it
+# lands on the base-missing stage below and fails there, instead of silently
+# building on the wrong base. A blank default would do the same but makes
+# BuildKit warn InvalidDefaultArgInFrom on every build.
+ARG AGENT=missing
 
 # The `-docker` flavour of each base template is the supported way to give an
 # agent a working Docker Engine: it ships dockerd/containerd, puts the agent in
@@ -25,6 +27,13 @@ ARG AGENT
 # /usr/local/share/npm-global (spike S10).
 FROM docker/sandbox-templates:claude-code-docker AS base-claude
 FROM docker/sandbox-templates:codex-docker AS base-codex
+
+FROM base-claude AS base-missing
+# The classic builder (DOCKER_BUILDKIT=0) builds every stage up to --target,
+# so this must fail only when AGENT really was not passed.
+ARG AGENT
+RUN test "${AGENT}" != missing \
+  || { echo "AGENT build arg is required; use: make build claude|codex" >&2; exit 1; }
 
 FROM base-${AGENT} AS common
 

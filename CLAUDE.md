@@ -89,8 +89,9 @@ One multi-stage `Dockerfile` builds both images. `ARG AGENT` selects the base:
 the CLI), `base-codex` is `docker/sandbox-templates:codex-docker` (node, npm and the `codex` CLI
 already installed). The `common` stage is `FROM base-${AGENT}`; the `claude` and `codex` stages are
 `FROM common` and add the agent-specific layers. `make build <agent>` passes `--target` and `AGENT`
-together, and each final stage fails if the two disagree. `AGENT` has no default, so a bare
-`docker build .` fails rather than guessing a base. The bases differ, so Docker builds `common` once
+together, and each final stage fails if the two disagree. `AGENT` defaults to the sentinel
+`missing`, whose `base-missing` stage exits 1, so a bare `docker build .` fails rather than guessing
+a base (a blank default would make BuildKit warn `InvalidDefaultArgInFrom`). The bases differ, so Docker builds `common` once
 per agent: the layers are shared in source, not in cache. The version ARGs
 (`AI_MEMORY_VERSION`, `GOLANGCI_LINT_VERSION`, `MCP_SERVER_MYSQL_VERSION`) are declared once, in
 `common`, and the verify scripts read them from there.
