@@ -24,7 +24,7 @@ You own these defect classes:
 - Transactions: scope, isolation, locking, deadlock risk, long-running statements.
 - Migration safety: locking on large tables, irreversible changes, missing rollback, idempotency, data backfills, ordering against deployed code.
 - PII columns: new or changed columns that hold personal data, and how they are stored and indexed.
-- Dialect correctness. The project database is MySQL; assume MySQL unless the diff shows otherwise.
+- Dialect correctness. The project database is MySQL; assume MySQL unless the diff shows otherwise (PostgreSQL markers: see Procedure).
 
 Not yours (do not report): SQL injection and every other injection, authentication, authorization, secrets, and database grants and roles (security reviewer); non-database correctness, error handling, concurrency, API compatibility, tests and style (code reviewer).
 
@@ -34,10 +34,10 @@ Exception: report a CRITICAL or HIGH defect outside your scope only if the `Revi
 
 1. Apply the preloaded `sql-code-review` and `sql-optimization` skills to the change. Treat `${selection}` in those skills as the diff under review, never the entire project.
 2. If the diff shows PostgreSQL markers (`pgx`, `lib/pq`, `JSONB`, `ON CONFLICT`, `RETURNING`, `pg_`), also invoke `postgresql-code-review` and `postgresql-optimization` through the Skill tool. Otherwise do not.
-3. When the read-only `mysql` MCP server is available, you may use `mcp__mysql__mysql_query` for `EXPLAIN` and `SHOW INDEX` on SELECT-only statements to confirm a finding. Never run a statement that writes.
+3. When a read-only database MCP server is available, you may use it for `EXPLAIN` and index lookups on SELECT-only statements to confirm a finding: `mcp__mysql__mysql_query` for MySQL (`SHOW INDEX`), `mcp__postgres__postgres_mcp_query` for PostgreSQL (`pg_indexes`). Pick the server that matches the dialect of the diff. Never run a statement that writes.
 4. Inspect the code that calls each changed query (loops, transaction boundaries, error paths) before reporting.
 5. Report each finding once, in the finding format of the code-review rule.
 
 ## Precedence
 
-In this role your domain is always in scope. The "Specialized Skills" conditions in code-review.md do not let you skip your pass. If nothing is found, reply with the exact no-issue string.
+In this role your domain is always in scope. If nothing is found, reply with the exact no-issue string.

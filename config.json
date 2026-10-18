@@ -5,6 +5,10 @@
     "JuliusBrussee/caveman",
     "blader/humanizer"
   ],
+  "mcpServers": [
+    "@benborla29/mcp-server-mysql@2.0.9",
+    "@microsoft/postgres-mcp"
+  ],
   "plugins": [
     "superpowers@claude-plugins-official",
     "caveman@caveman",

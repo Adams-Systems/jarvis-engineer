@@ -71,6 +71,14 @@ check 'memory volume is writable by the agent' \
 	'agent:agent' \
 	'stat -c %U:%G /var/lib/ai-memory'
 
+check 'go caches are on the persistent volume and writable' \
+	'/var/lib/go/mod agent:agent' \
+	'echo "$GOMODCACHE $(stat -c %U:%G /var/lib/go)"'
+
+check 'go race detector prerequisites are present' \
+	'CGO=1' \
+	'command -v gcc >/dev/null && echo CGO=$(go env CGO_ENABLED)'
+
 # --- mysql --------------------------------------------------------------
 check 'host mysql port is reachable from the sandbox' \
 	'PORT_UP' \
@@ -99,6 +107,27 @@ check 'both MCP servers report connected' \
 check 'mysql credentials are absent from the agent config' \
 	'CLEAN' \
 	'grep -qE "MYSQL_(PASS|USER)" ~/.claude.json && echo LEAKED || echo CLEAN'
+
+# --- postgres -----------------------------------------------------------
+# The kit registers postgres only when the sandbox was created with
+# POSTGRES_MCP_CONNECTION_STRING, so these cases apply only then.
+if sbx exec "$SANDBOX" -- sh -c '[ -n "$POSTGRES_MCP_CONNECTION_STRING" ]' >/dev/null 2>&1; then
+	check 'postgres MCP server is registered and connects' \
+		'Connected' \
+		'claude mcp list 2>&1 | grep -E "^postgres:"'
+
+	check 'postgres write tools are denied' \
+		'DENIED' \
+		'for t in postgres_mcp_modify postgres_mcp_bulk_load_csv postgres_mcp_add_connection; do
+			grep -q "mcp__postgres__$t" ~/.claude/settings.json || { echo "MISSING $t"; exit 0; }
+		done; echo DENIED'
+
+	check 'postgres connection string is absent from the agent config' \
+		'CLEAN' \
+		'grep -q "POSTGRES_MCP_CONNECTION_STRING" ~/.claude.json && echo LEAKED || echo CLEAN'
+else
+	printf 'skip postgres cases: POSTGRES_MCP_CONNECTION_STRING not set in the sandbox\n'
+fi
 
 # --- docker engine ------------------------------------------------------
 # The image only opts in via a label; whether sbx actually launched dockerd and

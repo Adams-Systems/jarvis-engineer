@@ -40,4 +40,4 @@ Exception: report a CRITICAL or HIGH defect outside your scope only if the `Revi
 
 ## Precedence
 
-In this role your domain is always in scope. The "Specialized Skills" conditions in code-review.md do not let you skip your pass. If nothing is found, reply with the exact no-issue string.
+In this role your domain is always in scope. If nothing is found, reply with the exact no-issue string.

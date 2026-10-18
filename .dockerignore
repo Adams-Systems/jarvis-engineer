@@ -9,6 +9,7 @@ docs
 scripts
 # ...except the scripts the image itself installs.
 !scripts/install-claude-plugins.sh
+!scripts/install-mcp-packages.sh
 !scripts/restore-claude-plugins.sh
 !scripts/jarvis-statusline.sh
 !scripts/trust-codex-hooks.js

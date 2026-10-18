@@ -89,6 +89,15 @@ check 'golangci-lint is the pinned version' \
 	"version $(arg_of Dockerfile GOLANGCI_LINT_VERSION)" \
 	'golangci-lint version'
 
+# Go's race detector needs cgo, which Go disables when no C compiler is on PATH.
+check 'cgo is enabled and a C compiler is on the agent PATH' \
+	'CGO=1' \
+	'command -v gcc >/dev/null && echo CGO=$(go env CGO_ENABLED)'
+
+check 'go tools are on the agent PATH' \
+	'TOOLS_OK' \
+	'for t in govulncheck gotestsum dlv mockgen swag goimports; do command -v "$t" >/dev/null || { echo "MISSING $t"; exit 0; }; done; echo TOOLS_OK'
+
 check 'claude-code hook bundle sits at the install-hooks default path' \
 	'session-start.sh' \
 	"ls $HOOKS_DIR/claude-code"
@@ -125,9 +134,19 @@ check 'agent can initialise a data directory' \
 	'config.toml' \
 	'AI_MEMORY_DATA_DIR=/tmp/v ai-memory init >/dev/null 2>&1; ls /tmp/v'
 
-check 'mysql mcp server is present for the investigator kit' \
-	'mcp-server-mysql' \
-	'ls /usr/local/share/npm-global/lib/node_modules/@benborla29'
+# Driven by config.json's mcpServers, like the plugin cases: an entry the build
+# did not install fails here rather than a list hardcoded in this script going
+# stale. The name is the spec minus its version (the last `@` that is not the scope).
+while IFS= read -r name; do
+	check "mcp server $name is installed under the npm prefix" \
+		"$name" \
+		"ls -d /usr/local/share/npm-global/lib/node_modules/$name"
+done < <(jq -r '.mcpServers[] | if (ltrimstr("@") | contains("@")) then sub("@[^@]*$"; "") else . end' "$CONFIG")
+
+# postgres-mcp needs Node 22+; an older base would install it and fail at start.
+check 'node is new enough for postgres-mcp' \
+	'NODE_OK' \
+	'node -e "process.exit(+process.versions.node.split(\".\")[0] >= 22 ? 0 : 1)" && echo NODE_OK'
 
 # --- docker engine ------------------------------------------------------
 # sbx decides whether to run the sandbox as docker-in-docker by reading this

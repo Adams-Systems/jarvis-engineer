@@ -65,27 +65,6 @@ Before reporting a finding:
 
 If a finding cannot be verified because required context is unavailable, do not present speculation as fact.
 
-# Specialized Skills
-
-The following specialized skills are available:
-
-* `security-review`
-* `security-hardening`
-* `sql-code-review`
-* `sql-optimization`
-* `postgresql-code-review`
-* `postgresql-optimization`
-
-Use a specialized skill when the diff materially involves its domain.
-
-Do not invoke security skills for changes with no meaningful security surface.
-
-Do not invoke SQL skills when the change has no SQL/database impact.
-
-Skills provide additional analysis; the actual diff and repository code remain authoritative.
-
-Do not report a skill recommendation unless it is supported by the actual code and review context.
-
 # Finding Format
 
 For every actionable finding, output exactly:

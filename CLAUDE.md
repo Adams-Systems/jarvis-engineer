@@ -8,8 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 set of content, in two kits: `agent/claude/` for Claude Code and `agent/codex/` for Codex. Both carry an
 orchestrator persona plus seven sub-agents — coder, refactorer, reviewer, expert, investigator,
 planner, and architect — and an `sbx` sandbox spec (`spec.yaml`) that provisions the sandbox:
-network allowlist, an `ai-memory` MCP server on a persistent volume, and a read-only MySQL MCP
-server reached on the host. The Claude kit adds three specialized reviewers (security, code,
+network allowlist, an `ai-memory` MCP server on a persistent volume, a read-only MySQL MCP
+server reached on the host, and Microsoft's `postgres-mcp` (read-only by denied tools). The Claude kit adds three specialized reviewers (security, code,
 database) that replace `jarvis-reviewer` there; the Codex kit does not have them.
 
 The roles, rules and skills of both kits are generated from `shared/` (see "Source of truth"
@@ -68,7 +68,7 @@ Running the verify scripts directly:
   — need a live `sbx` sandbox and `sbx exec`
 
 `.dockerignore` excludes `scripts/` and then re-includes only the scripts the images install
-(`install-claude-plugins.sh`, `restore-claude-plugins.sh`, `jarvis-statusline.sh`,
+(`install-claude-plugins.sh`, `install-mcp-packages.sh`, `restore-claude-plugins.sh`, `jarvis-statusline.sh`,
 `trust-codex-hooks.js`); a new script the `Dockerfile` `COPY`s fails the build with "not found" until it
 is listed there too.
 
@@ -76,7 +76,12 @@ Under Claude Code's macOS Seatbelt sandbox, writes into `agent/claude/files/home
 `make sync` has to run outside it; the generator exits 2 (it used to report success) when it
 cannot write a kit path.
 
-`.env` (git-ignored) holds `MYSQL_HOST`/`MYSQL_PORT`/`MYSQL_USER`/`MYSQL_PASS` and is only ever
+`.env` (git-ignored) holds `MYSQL_HOST`/`MYSQL_PORT`/`MYSQL_USER`/`MYSQL_PASS`. `POSTGRES_MCP_CONNECTION_STRING` (a
+`postgresql://` URI with `host.docker.internal` as the host, for a read-only role) enables the
+Postgres MCP server; without it that startup step warns and skips. For private Go
+modules it can also hold `GOPRIVATE` (and `GONOSUMDB`/`GOFLAGS` if needed) and `GOPRIVATE_GIT_TOKEN`
+(a GitHub token); a startup step then registers a git credential helper that reads the token from the
+environment, so the token is never written to `~/.gitconfig`. It is only ever
 passed with `--env-file .env` at `sbx create` time — never baked into the image or written into a
 kit spec.
 
@@ -93,7 +98,7 @@ together, and each final stage fails if the two disagree. `AGENT` defaults to th
 `missing`, whose `base-missing` stage exits 1, so a bare `docker build .` fails rather than guessing
 a base (a blank default would make BuildKit warn `InvalidDefaultArgInFrom`). The bases differ, so Docker builds `common` once
 per agent: the layers are shared in source, not in cache. The version ARGs
-(`AI_MEMORY_VERSION`, `GOLANGCI_LINT_VERSION`, `MCP_SERVER_MYSQL_VERSION`) are declared once, in
+(`AI_MEMORY_VERSION`, `GOLANGCI_LINT_VERSION`) are declared once, in
 `common`, and the verify scripts read them from there.
 
 The `common` stage installs, as root:
@@ -101,8 +106,18 @@ The `common` stage installs, as root:
 - a version-pinned `ai-memory` binary (via `mise`, `AI_MEMORY_VERSION`) to `/usr/local/bin/ai-memory`
   — copied rather than symlinked so the path baked into `~/.claude/settings.json` (or
   `~/.codex/hooks.json`) survives a later version bump — plus its hook bundle
-- `@benborla29/mcp-server-mysql` globally
+- the MCP server packages listed in `config.json` under `mcpServers` (npm specs, pinned with
+  `@version` or left on `latest`), installed globally by `scripts/install-mcp-packages.sh` as the
+  last step of the stage so a config edit does not rebuild the toolchain layers. The script runs
+  `npm install -g --engine-strict` (a package whose `engines.node` the base does not meet fails the
+  build) and then asserts each package is on disk. Today: `@benborla29/mcp-server-mysql@2.0.9` and
+  `@microsoft/postgres-mcp` (unpinned until a release is chosen). Adding a server here only
+  installs it: registering it with the agent is still a startup step in each kit's `spec.yaml`
 - `golangci-lint`
+- a C toolchain (`gcc`, `libc6-dev`) with `CGO_ENABLED=1`: Go switches cgo off when it finds no C
+  compiler, and `go test -race` needs cgo
+- Go tools on `PATH` via `go install`: `govulncheck`, `gotestsum`, `dlv`, `mockgen`, `swag`,
+  `goimports`. Their version ARGs default to `latest`; pin them to make rebuilds reproducible
 
 The `claude` stage adds:
 
@@ -188,8 +203,9 @@ status line renders. It is a file rather than an `environment.variables` entry b
 reads as drift.
 `$JARVIS_ROLE` overrides it; with neither, the line falls back to `AGENT`.
 
-The network allowlist is a base block that every kit must carry plus `registry.npmjs.org` /
-`registry.yarnpkg.com` for dependency resolution; `agent/claude/` carries both. `verify-kits.sh` asserts
+The network allowlist is a base block that every kit must carry (including the Go hosts
+`proxy.golang.org`, `sum.golang.org`, `vuln.go.dev`, `go.dev`, `pkg.go.dev`) plus `registry.npmjs.org` /
+`registry.yarnpkg.com` and the Docker Hub hosts (image pulls for integration tests) for dependency resolution; `agent/claude/` carries both. `verify-kits.sh` asserts
 the base is complete per kit, because the `permissions:` block sits above the shared block and is
 invisible to the drift comparison.
 
@@ -200,6 +216,8 @@ Codex kit carries its own variant of it, described under "Codex kit" below:
 
 - an `AI_MEMORY_DATA_DIR` volume at `/var/lib/ai-memory` (chowned to uid 1000 on install, since
   volumes mount root:root and `/home/agent` itself is reset on every sandbox creation)
+- a Go cache volume at `/var/lib/go` (`GOMODCACHE`, `GOCACHE`), chowned the same way, so a recreated
+  sandbox keeps downloaded modules and build output
 - startup steps that clear a stale serve lock, run `ai-memory init`, register the ai-memory MCP
   server + hooks (these must re-run per sandbox since `~/.claude*` doesn't survive from the image),
   and background `ai-memory serve` on `127.0.0.1:49374`, polled until it answers before startup
@@ -216,6 +234,17 @@ Codex kit carries its own variant of it, described under "Codex kit" below:
 - conditional registration of the read-only `mysql` MCP server (`ALLOW_INSERT/UPDATE/DELETE/DDL_OPERATION=false`),
   which no-ops with a warning (never a hard failure — a non-zero startup step silently aborts every
   later step) if `MYSQL_USER` or the `claude` CLI isn't available
+- conditional registration of the `postgres` MCP server, which runs before the MySQL step so MySQL
+  stays the last registration step the live verify scripts poll for. postgres-mcp has no documented
+  read-only switch for its headless connection (`POSTGRES_MCP_CONNECTION_STRING`; `--access-mode ro`
+  exists only for keyring-saved profiles, and the sandbox has no keyring), so the Claude kit merges
+  `mcp__postgres__postgres_mcp_{modify,bulk_load_csv,add_connection}` into
+  `~/.claude/settings.json` `permissions.deny`, and the Codex kit lists the same tools in
+  `disabled_tools`. The connection string carries the password: inherited from the sandbox
+  environment (Codex: `env_vars` by name), never `-e`. Use a read-only database role as well; the
+  tool denial is a second control, not the only one. `run --no-telemetry` because the sandbox has no
+  route for it. The tool names and Codex's `disabled_tools` support are from the docs, not yet seen
+  live: `verify-sandbox-*.sh` checks the config, not that the tools are actually gone.
 
 `scripts/verify-kits.sh` finds every kit by globbing `agent/*/spec.yaml` and keys its cases on the
 spec's `extends:` (the family: `claude` or `codex`). It diffs this shared block within a family, so

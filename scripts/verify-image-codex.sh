@@ -193,9 +193,36 @@ check 'golangci-lint is the pinned version' \
 	"version $GOLANGCI_LINT_VERSION" \
 	'golangci-lint version'
 
-check 'mysql mcp server is installed under the npm prefix' \
-	'mcp-server-mysql' \
-	"ls $NPM_PREFIX/lib/node_modules/@benborla29"
+# Go's race detector needs cgo, which Go disables when no C compiler is on PATH.
+check 'cgo is enabled and a C compiler is on the agent PATH' \
+	'CGO=1' \
+	'command -v gcc >/dev/null && echo CGO=$(go env CGO_ENABLED)'
+
+check 'go tools are on the agent PATH' \
+	'TOOLS_OK' \
+	'for t in govulncheck gotestsum dlv mockgen swag goimports; do command -v "$t" >/dev/null || { echo "MISSING $t"; exit 0; }; done; echo TOOLS_OK'
+
+# Driven by config.json's mcpServers, read from the copy inside the image (this
+# script needs only docker, not jq). The name is the spec minus its version (the
+# last `@` that is not the scope).
+check 'every mcpServers entry is installed under the npm prefix' \
+	'MCP_OK' \
+	"node -e '
+	  const fs = require(\"fs\");
+	  const cfg = JSON.parse(fs.readFileSync(\"/usr/local/share/jarvis-engineer/config.json\", \"utf8\"));
+	  const list = cfg.mcpServers || [];
+	  if (list.length === 0) { console.log(\"EMPTY_LIST\"); process.exit(0); }
+	  for (const spec of list) {
+	    const name = spec.slice(1).includes(\"@\") ? spec.replace(/@[^@]*\$/, \"\") : spec;
+	    if (!fs.existsSync(\"$NPM_PREFIX/lib/node_modules/\" + name)) { console.log(\"MISSING \" + name); process.exit(0); }
+	  }
+	  console.log(\"MCP_OK\");
+	'")
+
+# postgres-mcp needs Node 22+; an older base would install it and fail at start.
+check 'node is new enough for postgres-mcp' \
+	'NODE_OK' \
+	'node -e "process.exit(+process.versions.node.split(\".\")[0] >= 22 ? 0 : 1)" && echo NODE_OK'
 
 check 'codex resolves at the absolute path startup steps use' \
 	"$NPM_PREFIX/bin/codex" \

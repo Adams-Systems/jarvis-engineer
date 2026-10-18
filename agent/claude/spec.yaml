@@ -26,12 +26,21 @@ permissions:
       - "raw.githubusercontent.com"
       - "objects.githubusercontent.com"
       - "proxy.golang.org"
+      - "sum.golang.org"
+      - "vuln.go.dev"
+      - "go.dev"
+      - "pkg.go.dev"
       - "code.claude.com"
       # --- code-writing kits only ------------------------------------------
       # coder and refactorer are the only kits that install dependencies; the
       # read-only kits deliberately have no package-registry egress.
       - "registry.npmjs.org"
       - "registry.yarnpkg.com"
+      # Integration tests (testcontainers and similar) pull images into the
+      # nested Docker daemon.
+      - "registry-1.docker.io"
+      - "auth.docker.io"
+      - "production.cloudflare.docker.com"
 
 # --- shared ai-memory block ---------------------------------------------
 # Duplicated in the Claude and Codex kits. It cannot be factored into a
@@ -45,10 +54,17 @@ environment:
     # volume below. Not under /home/agent: home-mounted volumes come up
     # root:root, and agent config there is reset on sandbox creation anyway.
     AI_MEMORY_DATA_DIR: /var/lib/ai-memory
+    # Go module and build caches on a volume, so a recreated sandbox does
+    # not download and compile every dependency again.
+    GOMODCACHE: /var/lib/go/mod
+    GOCACHE: /var/lib/go/cache
 
 volumes:
   - path: /var/lib/ai-memory
     size: 5g
+    mode: "0755"
+  - path: /var/lib/go
+    size: 10g
     mode: "0755"
 
 setup:
@@ -57,6 +73,9 @@ setup:
     # is the only place the volume's root:root ownership can be handed over.
     - command: "chown 1000:1000 /var/lib/ai-memory"
       description: Give the agent user ownership of the memory volume
+
+    - command: "chown 1000:1000 /var/lib/go"
+      description: Give the agent user ownership of the Go cache volume
 
   startup:
     # The store now outlives the container, so a serve lock can survive an
@@ -140,6 +159,81 @@ setup:
           'for i in $(seq 1 30); do curl -fsS -o /dev/null -X POST -H ''Content-Type: application/json'' -H ''Accept: application/json, text/event-stream'' -d ''{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"startup","version":"0"}}}'' http://127.0.0.1:49374/mcp && exit 0; sleep 1; done; echo ''ai-memory: server not ready after 30s; continuing without memory'' >&2; exit 0',
         ]
       description: Wait for the ai-memory server to accept MCP requests
+
+    # --- private Go modules ------------------------------------------------
+    # Only when the sandbox was created with GOPRIVATE and GOPRIVATE_GIT_TOKEN
+    # (sbx create --env-file .env). The helper reads the token from the
+    # environment each time git asks, so no token value is ever written into
+    # ~/.gitconfig. Always exits 0: a non-zero startup step silently aborts
+    # every later step.
+    - command:
+        - "sh"
+        - "-c"
+        - |
+          if [ -n "$GOPRIVATE" ] && [ -n "$GOPRIVATE_GIT_TOKEN" ]; then
+            git config --global credential.https://github.com.helper \
+              '!f() { echo username=x-access-token; echo "password=$GOPRIVATE_GIT_TOKEN"; }; f' \
+              || echo "go: could not register the git credential helper" >&2
+          fi
+          exit 0
+      description: Let git read private Go modules with a token from the environment
+
+    # --- postgres --------------------------------------------------------
+    # Microsoft's postgres-mcp. Headless it reads one connection string from
+    # POSTGRES_MCP_CONNECTION_STRING (no OS keyring in the sandbox), which
+    # carries the password: it is deliberately NOT passed with -e, the server
+    # inherits it from the sandbox environment. Put host.docker.internal in the
+    # string; 127.0.0.1 would be the sandbox itself. Supply it at creation time
+    # (sbx create --env-file .env ...), using a read-only database role.
+    #
+    # The env-var connection has no documented read-only switch, so the write
+    # tools are denied in ~/.claude/settings.json instead. The denial is merged
+    # here, in the same step as the registration, because `sbx create` writes
+    # that file from scratch. --no-telemetry: the sandbox has no route for it.
+    # Runs before the mysql step so that stays the last registration step
+    # verify-sandbox-claude.sh polls for.
+    - command:
+        - "sh"
+        - "-c"
+        - |
+          CLAUDE=/home/agent/.local/bin/claude
+          [ -x "$CLAUDE" ] || CLAUDE=$(command -v claude 2>/dev/null)
+
+          if [ -z "$POSTGRES_MCP_CONNECTION_STRING" ]; then
+            echo "postgres: POSTGRES_MCP_CONNECTION_STRING unset, skipping registration (pass --env-file)" >&2
+            exit 0
+          fi
+          if [ -z "$CLAUDE" ]; then
+            echo "postgres: claude CLI not found, skipping registration" >&2
+            exit 0
+          fi
+
+          "$CLAUDE" mcp remove -s user postgres >/dev/null 2>&1
+          "$CLAUDE" mcp add -s user postgres \
+            -- npx -y @microsoft/postgres-mcp run --no-telemetry \
+            || echo "postgres: MCP registration failed" >&2
+
+          node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const file = path.join(process.env.HOME, ".claude", "settings.json");
+            let settings = {};
+            if (fs.existsSync(file)) settings = JSON.parse(fs.readFileSync(file, "utf8"));
+            else fs.mkdirSync(path.dirname(file), {recursive: true});
+            const deny = [
+              "mcp__postgres__postgres_mcp_modify",
+              "mcp__postgres__postgres_mcp_bulk_load_csv",
+              "mcp__postgres__postgres_mcp_add_connection",
+            ];
+            settings.permissions = settings.permissions || {};
+            settings.permissions.deny = [...new Set([...(settings.permissions.deny || []), ...deny])];
+            fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+          ' || echo "postgres: could not deny the write tools" >&2
+
+          # A non-zero exit from any startup step silently aborts every later
+          # step, so this must always succeed.
+          exit 0
+      description: Register the Postgres MCP server with Claude Code and deny its write tools
 
     # --- mysql -----------------------------------------------------------
     # The MCP server dials host.docker.internal:3306 directly -- the allowlist

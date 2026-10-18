@@ -56,6 +56,10 @@ BASE_ALLOW=(
 	raw.githubusercontent.com
 	objects.githubusercontent.com
 	proxy.golang.org
+	sum.golang.org
+	vuln.go.dev
+	go.dev
+	pkg.go.dev
 )
 
 # Per-family additions. Codex adds none: the model endpoint is reached through
@@ -122,7 +126,7 @@ claude_cases() {
 		'jarvis-engineer:claude' "$inspected"
 
 	check "$kit declares the memory volume + startup steps" \
-		'9 startup' "$inspected"
+		'11 startup' "$inspected"
 
 	# The image bakes the plugins, but `sbx create` rewrites
 	# ~/.claude/settings.json and drops the keys that load them, so a kit
@@ -160,6 +164,23 @@ claude_cases() {
 	check "$kit degrades when credentials are absent" \
 		'skipping registration' "$(spec_text "$kit")"
 
+	# postgres-mcp has no read-only switch for the env-var connection, so the
+	# write tools are denied in settings instead. Losing either name would
+	# leave a read-write server behind a read-only-looking kit.
+	check "$kit denies the postgres write tools" \
+		'DENIED' \
+		"$(for t in postgres_mcp_modify postgres_mcp_bulk_load_csv postgres_mcp_add_connection; do
+			grep -q "mcp__postgres__$t" "$kit/spec.yaml" || { echo "MISSING $t"; exit; }
+		done; echo DENIED)"
+
+	# The connection string carries the password: inherit it, never `-e` it.
+	check "$kit does not register the postgres connection string via -e" \
+		'CLEAN' \
+		"$(grep -qE '\-e POSTGRES_MCP_CONNECTION_STRING' "$kit/spec.yaml" && echo LEAKED || echo CLEAN)"
+
+	check "$kit turns postgres telemetry off" \
+		'run --no-telemetry' "$(spec_text "$kit")"
+
 	# Startup steps get a PATH without ~/.local/bin, so a bare `claude` exits
 	# 127 -- and a non-zero startup step silently aborts all later steps.
 	check "$kit invokes claude by absolute path" \
@@ -176,7 +197,7 @@ codex_cases() {
 		'jarvis-engineer:codex' "$inspected"
 
 	check "$kit declares the memory volume + startup steps" \
-		'8 startup' "$inspected"
+		'10 startup' "$inspected"
 
 	# The built-in codex kit's entrypoint is already
 	# `codex --dangerously-bypass-approvals-and-sandbox` (spike S9), and
@@ -234,6 +255,24 @@ codex_cases() {
 	check "$kit degrades when credentials are absent" \
 		'skipping registration' "$text"
 
+	# Same reasoning as the Claude kit: no read-only switch for the env-var
+	# connection, so the write tools are disabled by name.
+	check "$kit disables the postgres write tools" \
+		'DISABLED' \
+		"$(for t in postgres_mcp_modify postgres_mcp_bulk_load_csv postgres_mcp_add_connection; do
+			grep -q "disabled_tools = .*\"$t\"" "$kit/spec.yaml" || { echo "MISSING $t"; exit; }
+		done; echo DISABLED)"
+
+	check "$kit forwards the postgres connection string by name only" \
+		'env_vars = ["POSTGRES_MCP_CONNECTION_STRING"]' "$text"
+
+	check "$kit writes no postgres connection string value into config" \
+		'CLEAN' \
+		"$(grep -qE 'POSTGRES_MCP_CONNECTION_STRING *=' "$kit/spec.yaml" && echo LEAKED || echo CLEAN)"
+
+	check "$kit turns postgres telemetry off" \
+		'"run", "--no-telemetry"' "$text"
+
 	check "$kit ships a role label" \
 		'PRESENT' \
 		"$([[ -s "$kit/files/home/.jarvis-role" ]] && echo PRESENT || echo MISSING)"
@@ -277,6 +316,23 @@ common_cases() {
 
 	check "$kit points the store at the volume" \
 		'AI_MEMORY_DATA_DIR: /var/lib/ai-memory' "$(spec_text "$kit")"
+
+	# The Go caches live on a volume so a recreated sandbox keeps them.
+	check "$kit chowns the Go cache volume to the agent uid" \
+		'chown 1000:1000 /var/lib/go' "$(spec_text "$kit")"
+
+	check "$kit points the Go caches at the volume" \
+		'GOMODCACHE: /var/lib/go/mod' "$(spec_text "$kit")"
+
+	check "$kit registers the private-module credential helper by variable name" \
+		'password=$GOPRIVATE_GIT_TOKEN' "$(spec_text "$kit")"
+
+	# Testcontainers-style tests pull images into the nested Docker daemon.
+	check "$kit allows Docker Hub egress for image pulls" \
+		'COMPLETE' \
+		"$(for h in registry-1.docker.io auth.docker.io production.cloudflare.docker.com; do
+			grep -qF "\"$h\"" "$kit/spec.yaml" || echo "MISSING $h"
+		done | grep . || echo COMPLETE)"
 
 	# `environment.variables` does no host-env interpolation, so a "$VAR" value
 	# arrives as that literal text. Credentials must come from `sbx create

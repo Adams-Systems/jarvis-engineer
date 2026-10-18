@@ -40,15 +40,22 @@ FROM base-${AGENT} AS common
 USER root
 
 # Pin the release so template rebuilds are reproducible. Bump deliberately.
-ARG AI_MEMORY_VERSION=2.0.1
+ARG AI_MEMORY_VERSION=3.1.0
 
 # golangci-lint v2 understands the repository's version: "2" configuration
 # format. Its installer selects the appropriate pre-built binary for the image
 # architecture, which keeps both amd64 and arm64 templates supported.
 ARG GOLANGCI_LINT_VERSION=2.13.2
 
-# Pin MCP server package to keep rebuilds deterministic and reviewed.
-ARG MCP_SERVER_MYSQL_VERSION=2.0.9
+# Go tooling installed with `go install`. `latest` because the versions could
+# not be resolved when these were added; pin each to a release (build with
+# --build-arg, or edit here) to make rebuilds reproducible.
+ARG GOVULNCHECK_VERSION=latest
+ARG GOTESTSUM_VERSION=latest
+ARG DELVE_VERSION=latest
+ARG MOCKGEN_VERSION=latest
+ARG SWAG_VERSION=latest
+ARG GOIMPORTS_VERSION=latest
 
 # mise is a build-time tool only: it resolves the correct release asset for the
 # target architecture (these base images are amd64 + arm64) and verifies the
@@ -67,7 +74,7 @@ RUN curl -fsSL https://mise.run/bash | sh
 # The binary is copied rather than symlinked on purpose: `install-hooks` resolves
 # its own executable through any symlink and writes that absolute path into
 # ~/.claude/settings.json (or ~/.codex/hooks.json). Symlinking would bake the
-# version-pinned mise path ("/opt/mise/installs/.../2.0.1/ai-memory") into the
+# version-pinned mise path ("/opt/mise/installs/.../3.1.0/ai-memory") into the
 # agent's hook config, which breaks the moment AI_MEMORY_VERSION is bumped.
 RUN mise use -g "github:akitaonrails/ai-memory@${AI_MEMORY_VERSION}" \
   && src="$(mise where "github:akitaonrails/ai-memory@${AI_MEMORY_VERSION}")" \
@@ -76,16 +83,54 @@ RUN mise use -g "github:akitaonrails/ai-memory@${AI_MEMORY_VERSION}" \
   && cp -R "$src/hooks" /usr/local/share/ai-memory/hooks \
   && chmod -R a+rX /usr/local/share/ai-memory/hooks
 
-RUN npm install -g "@benborla29/mcp-server-mysql@${MCP_SERVER_MYSQL_VERSION}"
-
 RUN curl -sSfL https://golangci-lint.run/install.sh \
   | sh -s -- -b /usr/local/bin "v${GOLANGCI_LINT_VERSION}"
+
+# A C toolchain for Go's cgo. Go turns cgo off when it finds no C compiler on
+# PATH, and `go test -race` needs cgo, so without gcc the race detector cannot
+# run and the agent reports "-race didn't run because the sandbox has cgo
+# disabled". CGO_ENABLED=1 makes a missing compiler a loud build error rather
+# than a silent fallback to cgo off.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends gcc libc6-dev \
+  && rm -rf /var/lib/apt/lists/*
+ENV CGO_ENABLED=1
+
+# Go tools the rules and reviewers call: govulncheck (security review), gotestsum,
+# dlv, mockgen, swag (Swagger annotations) and goimports. GOBIN puts them on the
+# image PATH; the temporary GOPATH/GOMODCACHE keeps the module cache out of the
+# image layer.
+RUN GOBIN=/usr/local/bin GOPATH=/tmp/gotools GOMODCACHE=/tmp/gotools/mod GOFLAGS=-mod=mod \
+  sh -c ' \
+  go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" \
+  && go install "gotest.tools/gotestsum@${GOTESTSUM_VERSION}" \
+  && go install "github.com/go-delve/delve/cmd/dlv@${DELVE_VERSION}" \
+  && go install "go.uber.org/mock/mockgen@${MOCKGEN_VERSION}" \
+  && go install "github.com/swaggo/swag/cmd/swag@${SWAG_VERSION}" \
+  && go install "golang.org/x/tools/cmd/goimports@${GOIMPORTS_VERSION}"' \
+  && rm -rf /tmp/gotools
 
 # Fail the build rather than ship an image whose tools the agent cannot reach.
 RUN su agent -s /bin/sh -c 'ai-memory --version' | grep -q "ai-memory ${AI_MEMORY_VERSION}" \
   && golangci-lint version | grep -q "version ${GOLANGCI_LINT_VERSION}" \
+  && su agent -s /bin/sh -c 'command -v gcc && go env CGO_ENABLED' | grep -qx 1 \
+  && su agent -s /bin/sh -c 'for t in govulncheck gotestsum dlv mockgen swag goimports; do command -v "$t" >/dev/null || exit 1; done' \
   && command -v dockerd >/dev/null \
   && id -nG agent | grep -qw docker
+
+# Install the MCP servers listed in config.json. Last in this stage on purpose:
+# editing the file invalidates the layers after the COPY, so keeping them at the
+# end means a config change reinstalls only these packages, not the toolchain
+# above. Globally, so `npx -y` in a kit's startup step resolves them without a
+# registry round trip at sandbox start. The script fails the build on a package
+# that did not install or whose `engines.node` the base image does not meet.
+# config.json is kept in the image: the Claude stage reads its plugin list from
+# the same file.
+COPY config.json /usr/local/share/jarvis-engineer/config.json
+COPY scripts/install-mcp-packages.sh /usr/local/bin/install-mcp-packages
+RUN chmod 0644 /usr/local/share/jarvis-engineer/config.json \
+  && chmod 0755 /usr/local/bin/install-mcp-packages \
+  && install-mcp-packages
 
 
 FROM common AS claude
@@ -110,7 +155,6 @@ RUN test "${AGENT}" = claude \
 #
 # Both files are kept in the image rather than removed after the build: together
 # they are how an agent adds a plugin to, or repairs, its own running sandbox.
-COPY config.json /usr/local/share/jarvis-engineer/config.json
 COPY scripts/install-claude-plugins.sh /usr/local/bin/install-claude-plugins
 COPY scripts/restore-claude-plugins.sh /usr/local/bin/restore-claude-plugins
 
@@ -125,7 +169,6 @@ COPY scripts/jarvis-statusline.sh /usr/local/bin/jarvis-statusline
 # /root paths that uid 1000 cannot read -- the same trap mise fell into above.
 # `su` alone does not set HOME, so it is passed explicitly.
 RUN chmod 0755 /usr/local/bin/install-claude-plugins \
-  && chmod 0644 /usr/local/share/jarvis-engineer/config.json \
   && chmod 0755 /usr/local/bin/restore-claude-plugins \
   && chmod 0755 /usr/local/bin/jarvis-statusline \
   && su agent -s /bin/sh -c "HOME=/home/agent install-claude-plugins"
@@ -185,7 +228,6 @@ RUN chmod 0755 /usr/local/bin/trust-codex-hooks
 # Fail the build rather than ship an image whose Codex-only pieces do not work.
 RUN su agent -s /bin/sh -c 'test -x /usr/local/share/ai-memory/hooks/codex/session-start.sh' \
   && su agent -s /bin/sh -c '/usr/local/share/npm-global/bin/codex --version' \
-  && su agent -s /bin/sh -c 'command -v trust-codex-hooks' \
-  && test -d /usr/local/share/npm-global/lib/node_modules/@benborla29/mcp-server-mysql
+  && su agent -s /bin/sh -c 'command -v trust-codex-hooks'
 
 USER agent
