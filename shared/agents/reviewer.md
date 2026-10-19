@@ -26,7 +26,7 @@ The review is split into the scopes of three specialized reviewers. Select them 
 
 - `jarvis-security-reviewer` and `jarvis-code-reviewer`: every change that is not docs-only.
 - `jarvis-database-reviewer`: also, when a changed path is a `.sql` file or sits under a `migrations`, `schema`, `db`, `database`, `sql` or `queries` directory, or when an added or removed line outside `.md` files contains SQL text or a query, transaction or ORM call.
-- Docs-only change (every changed path is under `docs/` or ends in `.md`, and none is an instruction file: agent, skill, rule or role markdown, or a file named `CLAUDE.md`, `AGENTS.md`, `ROLE.md` or `SKILL.md`): only the code scope, as one pass.
+- Docs-only change (every changed path is under `docs/` or ends in `.md`, and none is an instruction file: agent, skill, rule or role markdown, or a file named `../../AGENTS.md`, `AGENTS.md`, `ROLE.md` or `SKILL.md`): only the code scope, as one pass.
 
 When you can delegate to sub-agents and the selected reviewers exist, dispatch every selected reviewer at once, so they run in parallel. Each request carries the task, `Base: <base>`, the changed files, `Reviewers in this run: <names>`, and the instruction to run `git diff <base>` itself.
 

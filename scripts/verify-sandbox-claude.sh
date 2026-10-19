@@ -61,7 +61,15 @@ sbx exec "$SANDBOX" -- sh -c '
 # --- ai-memory ----------------------------------------------------------
 check 'ai-memory MCP server answers a handshake' \
 	'"serverInfo":{"name":"ai-memory"' \
-	'curl -s --max-time 10 http://127.0.0.1:49374/mcp -X POST -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"v\",\"version\":\"0\"}}}"'
+	'AUTH_TOKEN="$AI_MEMORY_AUTH_TOKEN"
+	if [ -z "$AUTH_TOKEN" ] && [ -s "$AI_MEMORY_DATA_DIR/auth-tokens/default" ]; then
+		AUTH_TOKEN=$(cat "$AI_MEMORY_DATA_DIR/auth-tokens/default")
+	fi
+	if [ -n "$AUTH_TOKEN" ]; then
+		curl -s --max-time 10 http://127.0.0.1:49374/mcp -X POST -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -H "Authorization: Bearer $AUTH_TOKEN" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"v\",\"version\":\"0\"}}}"
+	else
+		curl -s --max-time 10 http://127.0.0.1:49374/mcp -X POST -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"v\",\"version\":\"0\"}}}"
+	fi'
 
 check 'memory store is on the persistent volume' \
 	'/var/lib/ai-memory' \

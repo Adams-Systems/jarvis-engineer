@@ -137,14 +137,30 @@ setup:
     # `background: true` means the agent would otherwise launch while the server
     # is still binding, and its MCP connection would fail. Later startup steps
     # run only after this one returns, so polling here gates the agent on
-    # readiness. Bounded and always exits 0: a server that never comes up must
+    # readiness. A persistent store may have a bearer token file; use it when
+    # present. Bounded and always exits 0: a server that never comes up must
     # degrade to "memory unavailable", not "sandbox will not start".
     - command:
-        [
-          "sh",
-          "-c",
-          'for i in $(seq 1 30); do curl -fsS -o /dev/null -X POST -H ''Content-Type: application/json'' -H ''Accept: application/json, text/event-stream'' -d ''{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"startup","version":"0"}}}'' http://127.0.0.1:49374/mcp && exit 0; sleep 1; done; echo ''ai-memory: server not ready after 30s; continuing without memory'' >&2; exit 0',
-        ]
+        - "sh"
+        - "-c"
+        - |
+          request() {
+            auth_token="$AI_MEMORY_AUTH_TOKEN"
+            if [ -z "$auth_token" ] && [ -s "$AI_MEMORY_DATA_DIR/auth-tokens/default" ]; then
+              auth_token=$(cat "$AI_MEMORY_DATA_DIR/auth-tokens/default")
+            fi
+            if [ -n "$auth_token" ]; then
+              curl -fsS -o /dev/null -X POST -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -H "Authorization: Bearer $auth_token" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"startup","version":"0"}}}' http://127.0.0.1:49374/mcp
+            else
+              curl -fsS -o /dev/null -X POST -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"startup","version":"0"}}}' http://127.0.0.1:49374/mcp
+            fi
+          }
+          for i in $(seq 1 30); do
+            request && exit 0
+            sleep 1
+          done
+          echo 'ai-memory: server not ready after 30s; continuing without memory' >&2
+          exit 0
       description: Wait for the ai-memory server to accept MCP requests
 
     # --- private Go modules ------------------------------------------------

@@ -10,7 +10,7 @@
 # MCP servers, no credential values, and ai-memory's hooks trusted.
 #
 # No case makes a model call (that costs tokens and needs the account); see
-# CLAUDE.md for the one manual `codex exec` check.
+# AGENTS.md for the one manual `codex exec` check.
 #
 # Usage: scripts/verify-sandbox-codex.sh <sandbox-name>
 
@@ -62,7 +62,15 @@ sbx exec "$SANDBOX" -- sh -c '
 # --- ai-memory ----------------------------------------------------------
 check 'ai-memory MCP server answers a handshake' \
 	'"serverInfo":{"name":"ai-memory"' \
-	'curl -s --max-time 10 http://127.0.0.1:49374/mcp -X POST -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"v\",\"version\":\"0\"}}}"'
+	'AUTH_TOKEN="$AI_MEMORY_AUTH_TOKEN"
+	if [ -z "$AUTH_TOKEN" ] && [ -s "$AI_MEMORY_DATA_DIR/auth-tokens/default" ]; then
+		AUTH_TOKEN=$(cat "$AI_MEMORY_DATA_DIR/auth-tokens/default")
+	fi
+	if [ -n "$AUTH_TOKEN" ]; then
+		curl -s --max-time 10 http://127.0.0.1:49374/mcp -X POST -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -H "Authorization: Bearer $AUTH_TOKEN" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"v\",\"version\":\"0\"}}}"
+	else
+		curl -s --max-time 10 http://127.0.0.1:49374/mcp -X POST -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"v\",\"version\":\"0\"}}}"
+	fi'
 
 check 'memory store is on the persistent volume' \
 	'/var/lib/ai-memory' \
@@ -151,7 +159,7 @@ check 'startup steps keep the sbx model provider' \
 # Codex runs a hook only once it is trusted; this is Codex's own view of the
 # hooks after every startup step ran, read through its app-server.
 check 'Codex reports every ai-memory hook trusted' \
-	'trusted=6 untrusted=0' \
+	'trusted=7 untrusted=0' \
 	"(printf '%s\n' '{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"verify\",\"version\":\"0\"}}}' '{\"method\":\"initialized\"}' '{\"id\":2,\"method\":\"hooks/list\",\"params\":{\"cwds\":[\"/home/agent\"]}}'; sleep 4) | timeout 20 $CODEX app-server 2>/dev/null | grep '\"id\":2' >/tmp/hooks-list.json;
 	 echo \"trusted=\$(grep -o '\"trustStatus\":\"trusted\"' /tmp/hooks-list.json | wc -l | tr -d ' ') untrusted=\$(grep -o '\"trustStatus\":\"untrusted\"' /tmp/hooks-list.json | wc -l | tr -d ' ')\""
 

@@ -131,17 +131,17 @@ check 'trust-codex-hooks resolves on the agent PATH' \
 	'command -v trust-codex-hooks'
 
 check 'ai-memory hooks start untrusted (the baseline the helper changes)' \
-	'trusted=0 untrusted=6' \
+	'trusted=0 untrusted=7' \
 	"$install_ai_memory_hooks $hook_trust_counts"
 
 check 'trust-codex-hooks makes Codex report every ai-memory hook trusted' \
-	'trusted=6 untrusted=0' \
+	'trusted=7 untrusted=0' \
 	"$install_ai_memory_hooks trust-codex-hooks >/dev/null 2>&1; $hook_trust_counts"
 
 # Only ai-memory's hooks are pre-trusted (ADR D6); anything else in the file
 # still goes through Codex's own review.
 check 'trust-codex-hooks leaves a hook that is not ai-memory untrusted' \
-	'trusted=6 untrusted=1' \
+	'trusted=7 untrusted=1' \
 	"$install_ai_memory_hooks
 	 node -e 'const f=process.env.HOME+\"/.codex/hooks.json\",fs=require(\"fs\"),h=JSON.parse(fs.readFileSync(f));h.hooks.Stop.push({matcher:\"\",hooks:[{type:\"command\",command:\"sh -c true\"}]});fs.writeFileSync(f,JSON.stringify(h))';
 	 trust-codex-hooks >/dev/null 2>&1; $hook_trust_counts"
@@ -149,7 +149,7 @@ check 'trust-codex-hooks leaves a hook that is not ai-memory untrusted' \
 # A command that merely starts like ai-memory's (here with a shell command
 # appended) is not ai-memory's hook, and must not be trusted.
 check 'trust-codex-hooks leaves a hook that only starts like ai-memory untrusted' \
-	'trusted=6 untrusted=1' \
+	'trusted=7 untrusted=1' \
 	"$install_ai_memory_hooks
 	 node -e 'const f=process.env.HOME+\"/.codex/hooks.json\",fs=require(\"fs\"),h=JSON.parse(fs.readFileSync(f));h.hooks.Stop.push({matcher:\"\",hooks:[{type:\"command\",command:\"/usr/local/bin/ai-memory --x hook --event stop; touch /tmp/spoofed\"}]});fs.writeFileSync(f,JSON.stringify(h))';
 	 trust-codex-hooks >/dev/null 2>&1; $hook_trust_counts"
@@ -217,7 +217,7 @@ check 'every mcpServers entry is installed under the npm prefix' \
 	    if (!fs.existsSync(\"$NPM_PREFIX/lib/node_modules/\" + name)) { console.log(\"MISSING \" + name); process.exit(0); }
 	  }
 	  console.log(\"MCP_OK\");
-	'")
+	'"
 
 # postgres-mcp needs Node 22+; an older base would install it and fail at start.
 check 'node is new enough for postgres-mcp' \

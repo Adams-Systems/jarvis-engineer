@@ -172,7 +172,7 @@ On Claude Code, do not use `jarvis-reviewer`. Review with the specialized review
 
 - `jarvis-security-reviewer` and `jarvis-code-reviewer`: every diff that is not docs-only.
 - `jarvis-database-reviewer`: also, when the probe reports SQL surface.
-- Docs-only diff (every changed path is under `docs/` or `*.md`, and none is an instruction file: under `.claude/`, `shared/`, `agents/`, `skills/`, or named `CLAUDE.md`, `AGENTS.md`, `ROLE.md`, `SKILL.md`): no reviewer; say so.
+- Docs-only diff (every changed path is under `docs/` or `*.md`, and none is an instruction file: under `.claude/`, `shared/`, `agents/`, `skills/`, or named `../../../../AGENTS.md`, `AGENTS.md`, `ROLE.md`, `SKILL.md`): no reviewer; say so.
 
 Probe (run from the repository root; replace the `base=` line if the task names a base):
 
