@@ -37,6 +37,7 @@ CONFIG="${1:-/usr/local/share/jarvis-engineer/config.json}"
 # matched -- a stray comma should fail the build loudly, not silently install a
 # truncated list.
 read_list() {
+	# shellcheck disable=SC2016
 	node -e '
 		const path = require("path");
 		const cfg = require(path.resolve(process.argv[1]));

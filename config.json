@@ -10,6 +10,9 @@
     "@benborla29/mcp-server-mysql@2.0.9",
     "@microsoft/postgres-mcp"
   ],
+  "skills": [
+    "security-audit@cloudflare/security-audit-skill"
+  ],
   "plugins": [
     "superpowers@claude-plugins-official",
     "caveman@caveman",

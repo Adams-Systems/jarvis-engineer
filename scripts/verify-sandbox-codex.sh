@@ -183,9 +183,32 @@ check 'every rule the AGENTS.md index points at exists' \
 	"$(cd "$KIT_HOME/.jarvis/rules" && ls | sort | paste -sd ' ' -)" \
 	'cd /home/agent/.jarvis/rules && ls | sort | paste -sd " " -'
 
+# The kit's generated skills plus the ones the image baked from config.json's
+# skills. The baked names come from the config copy inside the sandbox, so this
+# script needs no jq.
+baked_skills="$(sbx exec "$SANDBOX" -- node -e '
+	const cfg = require("/usr/local/share/jarvis-engineer/config.json");
+	for (const e of cfg.skills || []) console.log(e.split("@")[0]);
+' 2>/dev/null | tr -d '\r')"
+
 check 'every skill is in place' \
-	"$(cd "$KIT_HOME/.agents/skills" && ls | sort | paste -sd ' ' -)" \
+	"$( (cd "$KIT_HOME/.agents/skills" && ls; printf '%s\n' "$baked_skills") | grep -v '^$' | sort | paste -sd ' ' -)" \
 	'cd /home/agent/.agents/skills && ls | sort | paste -sd " " -'
+
+check 'baked skills are readable by the agent' \
+	'SKILLS_OK' \
+	'node -e "
+	  const fs = require(\"fs\");
+	  const cfg = require(\"/usr/local/share/jarvis-engineer/config.json\");
+	  const list = cfg.skills || [];
+	  if (list.length === 0) { console.log(\"EMPTY_LIST\"); process.exit(0); }
+	  for (const e of list) {
+	    const n = e.split(\"@\")[0];
+	    try { fs.accessSync(\"/home/agent/.agents/skills/\" + n + \"/SKILL.md\", fs.constants.R_OK); }
+	    catch (x) { console.log(\"MISSING \" + n); process.exit(0); }
+	  }
+	  console.log(\"SKILLS_OK\");
+	"'
 
 # --- docker engine ------------------------------------------------------
 check 'docker daemon answers the agent' \

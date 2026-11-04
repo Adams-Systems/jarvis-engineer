@@ -28,6 +28,11 @@ while IFS= read -r plugin; do
 	plugins+=("$plugin")
 done < <(jq -r '.plugins[]' "$CONFIG")
 
+skills=()
+while IFS= read -r skill; do
+	skills+=("$skill")
+done < <(jq -r '.skills[] | split("@")[0]' "$CONFIG")
+
 pass=0
 fail=0
 
@@ -273,6 +278,28 @@ check 'restore-claude-plugins is idempotent' \
 	'RUN2_OK' \
 	'restore-claude-plugins >/dev/null 2>&1;
 	 restore-claude-plugins >/dev/null 2>&1 && echo RUN2_OK'
+
+# --- third-party skills -------------------------------------------------
+# Driven by config.json's skills, like the plugin cases. Read as the agent
+# (uid 1000): a skill installed as root is on disk and unreadable to it.
+if [[ ${#skills[@]} -eq 0 ]]; then
+	printf 'FAIL %s lists no skills; the cases below would pass vacuously\n' "$CONFIG"
+	fail=$((fail + 1))
+fi
+
+for skill in "${skills[@]}"; do
+	check "skill $skill is installed for claude code and readable by the agent" \
+		"SKILL_OK" \
+		"test -s /home/agent/.claude/skills/$skill/SKILL.md && echo SKILL_OK"
+done
+
+check 'install-agent-skills resolves on the agent PATH' \
+	'/usr/local/bin/install-agent-skills' \
+	'command -v install-agent-skills'
+
+check 'install-agent-skills rejects an unknown agent' \
+	'usage: install-agent-skills' \
+	'install-agent-skills nobody 2>&1'
 
 # --- status line --------------------------------------------------------
 # Same shape as the plugin settings: `statusLine` is a settings.json key, so it

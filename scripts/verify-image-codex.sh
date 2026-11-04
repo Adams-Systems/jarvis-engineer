@@ -188,6 +188,34 @@ check 'trust-codex-hooks is idempotent' \
 	'RUN2_OK' \
 	"$install_ai_memory_hooks trust-codex-hooks >/dev/null 2>&1; trust-codex-hooks >/dev/null 2>&1 && echo RUN2_OK"
 
+# --- third-party skills -------------------------------------------------
+# Driven by config.json's skills, read from the copy inside the image (this
+# script needs only docker, not jq). Codex reads ~/.agents/skills, and the check
+# runs as the agent (uid 1000): a skill installed as root is on disk and
+# unreadable to it.
+check 'every skills entry is installed for codex and readable by the agent' \
+	'SKILLS_OK' \
+	"node -e '
+	  const fs = require(\"fs\");
+	  const cfg = JSON.parse(fs.readFileSync(\"/usr/local/share/jarvis-engineer/config.json\", \"utf8\"));
+	  const list = cfg.skills || [];
+	  if (list.length === 0) { console.log(\"EMPTY_LIST\"); process.exit(0); }
+	  for (const entry of list) {
+	    const name = entry.split(\"@\")[0];
+	    try { fs.accessSync(process.env.HOME + \"/.agents/skills/\" + name + \"/SKILL.md\", fs.constants.R_OK); }
+	    catch (e) { console.log(\"MISSING \" + name); process.exit(0); }
+	  }
+	  console.log(\"SKILLS_OK\");
+	'"
+
+check 'install-agent-skills resolves on the agent PATH' \
+	'/usr/local/bin/install-agent-skills' \
+	'command -v install-agent-skills'
+
+check 'install-agent-skills rejects an unknown agent' \
+	'usage: install-agent-skills' \
+	'install-agent-skills nobody 2>&1'
+
 # --- tools --------------------------------------------------------------
 check 'golangci-lint is the pinned version' \
 	"version $GOLANGCI_LINT_VERSION" \
