@@ -173,6 +173,15 @@ RUN chmod 0755 /usr/local/bin/install-claude-plugins \
   && chmod 0755 /usr/local/bin/jarvis-statusline \
   && su agent -s /bin/sh -c "HOME=/home/agent install-claude-plugins"
 
+# Bake the third-party skills listed in config.json under `skills`. They are
+# not plugins, so the plugin CLI does not bring them in: the `skills` CLI installs
+# them into ~/.claude/skills, as the agent for the same reason as the plugins
+# above. The script is kept in the image so an agent can add one to, or repair,
+# its own running sandbox. Like plugins, an entry takes its source's current tip.
+COPY scripts/install-agent-skills.sh /usr/local/bin/install-agent-skills
+RUN chmod 0755 /usr/local/bin/install-agent-skills \
+  && su agent -s /bin/sh -c "HOME=/home/agent install-agent-skills claude-code"
+
 # Snapshot the two settings keys the install just wrote. `sbx create` recreates
 # ~/.claude/settings.json from scratch, so those keys never reach a sandbox --
 # the cache survives but every plugin comes up disabled. The kits' startup steps
@@ -224,6 +233,12 @@ RUN test "${AGENT}" = codex \
 # reason: everything under it is per-sandbox state.
 COPY scripts/trust-codex-hooks.js /usr/local/bin/trust-codex-hooks
 RUN chmod 0755 /usr/local/bin/trust-codex-hooks
+
+# Bake the third-party skills listed in config.json under `skills`, into
+# ~/.agents/skills where Codex reads them. See the claude stage.
+COPY scripts/install-agent-skills.sh /usr/local/bin/install-agent-skills
+RUN chmod 0755 /usr/local/bin/install-agent-skills \
+  && su agent -s /bin/sh -c "HOME=/home/agent install-agent-skills codex"
 
 # Fail the build rather than ship an image whose Codex-only pieces do not work.
 RUN su agent -s /bin/sh -c 'test -x /usr/local/share/ai-memory/hooks/codex/session-start.sh' \

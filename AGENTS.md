@@ -68,7 +68,7 @@ Running the verify scripts directly:
   — need a live `sbx` sandbox and `sbx exec`
 
 `.dockerignore` excludes `scripts/` and then re-includes only the scripts the images install
-(`install-claude-plugins.sh`, `install-mcp-packages.sh`, `restore-claude-plugins.sh`, `jarvis-statusline.sh`,
+(`install-agent-skills.sh`, `install-claude-plugins.sh`, `install-mcp-packages.sh`, `restore-claude-plugins.sh`, `jarvis-statusline.sh`,
 `trust-codex-hooks.js`); a new script the `Dockerfile` `COPY`s fails the build with "not found" until it
 is listed there too.
 
@@ -130,6 +130,8 @@ The `claude` stage adds:
   exists because `sbx create` writes `~/.claude/settings.json` from scratch (permissions, model):
   the plugin _cache_ under `~/.claude/plugins` survives from the image, but the settings keys that
   load it do not, so without the restore step every baked plugin comes up `"enabled": false`.
+- the third-party skills listed in `config.json` under `skills`, baked into `~/.claude/skills` by
+  `scripts/install-agent-skills.sh claude-code` (see "Third-party skills" below)
   The snapshot is taken from the resolved settings rather than derived from `config.json`, because
   a marketplace's _name_ comes from its own manifest, not from its repo path
   (`mattpocock/skills` resolves to the marketplace `mattpocock`).
@@ -145,7 +147,8 @@ hand outside the image is lost, so "does it survive a fresh sandbox" is the real
 
 ### Codex target
 
-The `codex` stage adds only `scripts/trust-codex-hooks.js`, installed as
+The `codex` stage adds `scripts/install-agent-skills.sh codex` (third-party skills into
+`~/.agents/skills`, see below) and `scripts/trust-codex-hooks.js`, installed as
 `/usr/local/bin/trust-codex-hooks`. Codex runs
 a hook only after its exact definition is trusted (a per-handler hash under `[hooks.state]` in
 `~/.codex/config.toml`), and sbx recreates `~/.codex` per sandbox. The helper asks the installed
@@ -156,6 +159,20 @@ starts like it, e.g. with `; ...` appended, is not trusted). No hash is baked in
 break it silently; any other hook still goes through Codex's review. It lets go of the app-server
 after use, so a server that ignores SIGTERM cannot hang sandbox startup. Nothing Claude-specific
 (plugins, status line) is built into this target.
+
+### Third-party skills
+
+`config.json`'s `skills` is a list of `skill@source` strings (the shape of `plugin@marketplace`),
+e.g. `security-audit@cloudflare/security-audit-skill`. `scripts/install-agent-skills.sh <claude-code|codex>`
+runs `npx -y skills add <source> --skill <skill> -g -a <agent> --copy -y` for each entry, as the `agent`
+user, in the `claude` and `codex` stages, and then asserts that `<dir>/<skill>/SKILL.md` exists
+(`~/.claude/skills` for Claude, `~/.agents/skills` for Codex). There is no version pin: like plugins, an
+entry takes its source's current tip, and an unchanged config reuses the cached layer (use
+`--no-cache-filter` on the stage to pull a newer tip). The `skills` CLI needs Node 22.20 or later. Skills
+this repo writes itself belong in `shared/skills/` instead; the two sets never share a name. Whether
+`~/.claude/skills` and `~/.agents/skills` survive `sbx create` has not been checked live: if
+`verify-sandbox-*.sh` reports the baked skills missing, add a startup step that restores them from a path
+outside `$HOME`, as `restore-claude-plugins` does for plugin settings.
 
 ### Kit (`agent/claude/spec.yaml` + `agent/claude/files/home/`)
 

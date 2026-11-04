@@ -192,6 +192,13 @@ check 'superpowers skills are readable in the sandbox' \
 	'brainstorming' \
 	'ls /home/agent/.claude/plugins/cache/claude-plugins-official/superpowers/*/skills'
 
+# --- baked third-party skills -------------------------------------------
+# config.json's skills are installed into ~/.claude/skills at image build time.
+# Whether that directory survives `sbx create` is only observable here.
+check 'baked skills survive sandbox creation' \
+	"$(jq -r '.skills[] | split("@")[0]' "$CONFIG" | sort | paste -sd ' ' -)" \
+	'cd /home/agent/.claude/skills && for n in $(node -e "for (const e of require(\"/usr/local/share/jarvis-engineer/config.json\").skills || []) console.log(e.split(\"@\")[0])"); do test -s "$n/SKILL.md" && echo "$n"; done | sort | paste -sd " " -'
+
 # --- sub-agents ---------------------------------------------------------
 # sbx copies files/home into the sandbox; a stale or partial copy would leave
 # the review fan-out in ROLE.md pointing at reviewers that are not there.
