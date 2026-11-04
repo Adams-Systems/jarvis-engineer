@@ -1,0 +1,654 @@
+# syntax=docker/sandbox-kit:3
+#
+# The jarvis-engineer Claude kit, in sandbox-kit v3. sbx v0.51.0 no longer
+# resolves the v2 `extends: claude`, so this workload is built FROM Docker's
+# published Claude kit (see the Dockerfile's base-claude). A recipe built FROM a
+# kit does not inherit its descriptor, so the claude capabilities this kit
+# still needs are restated below, marked "from docker/sbx-kit-claude:2.1.267".
+# Re-copy them from /usr/share/sandbox/kit/claude/kit.yaml when that pin moves.
+#
+# This file is hand-owned. `make sandbox claude` stages it, with the Dockerfile
+# and everything that Dockerfile COPYs, into build/kits/jarvis-engineer/ (the
+# build context of a local kit is its own directory) and creates the sandbox
+# from there. The agent name is that directory's name.
+schemaVersion: "3"
+kind: workload
+displayName: Jarvis Engineer
+description: "Senior Software Engineer responsible for orchestrating agents according to the role and responsibilities of an engineer."
+
+args:
+    # Selects the Dockerfile's stages: `common` is built FROM base-${AGENT}, and
+    # the staged recipe ends in `FROM claude`. Not a choice: the one value is
+    # the agent this kit is.
+    agent:
+        default: claude
+        enum: [claude]
+        buildArg: AGENT
+        description: Agent stage of the jarvis-engineer Dockerfile
+
+capabilities:
+    - type: com.docker.sandbox/sbx@1
+
+    - type: com.docker.sandbox/network-policy@1
+      config:
+        runtime:
+            allow:
+                # --- from docker/sbx-kit-claude:2.1.267 -----------------------
+                - api.anthropic.com
+                - console.anthropic.com
+                - claude.ai
+                - mcp-proxy.anthropic.com
+                - platform.claude.com
+                - downloads.claude.ai
+                - claude.com
+                - code.claude.com
+                - bridge.claudeusercontent.com
+                - archive.ubuntu.com
+                - security.ubuntu.com
+                - ports.ubuntu.com
+                - download.docker.com
+                # --- base: identical in every kit ----------------------------
+                # host.docker.internal covers MySQL and Postgres: the MCP servers
+                # dial host.docker.internal directly, so no loopback rule is needed.
+                - host.docker.internal
+                - gateway.docker.internal
+                - github.com
+                - api.github.com
+                - raw.githubusercontent.com
+                - objects.githubusercontent.com
+                - proxy.golang.org
+                - sum.golang.org
+                - vuln.go.dev
+                - go.dev
+                - pkg.go.dev
+                # --- code-writing kits only ----------------------------------
+                - registry.npmjs.org
+                - registry.yarnpkg.com
+                # Integration tests (testcontainers and similar) pull images into
+                # the nested Docker daemon.
+                - registry-1.docker.io
+                - auth.docker.io
+                - production.cloudflare.docker.com
+
+    # --- from docker/sbx-kit-claude:2.1.267 -----------------------------------
+    - type: com.docker.sandbox/credential@1
+      optional: true
+      description: Anthropic API access (console API key or Claude subscription)
+      config:
+        service: anthropic
+        phase: runtime
+        apiKey:
+            # NOTE: deliberately NOT `proxyManaged: true`, unlike most apiKey-based
+            # kits in this repo, and this is the single most load-bearing omission
+            # in the file. With proxyManaged the engine would set ANTHROPIC_API_KEY
+            # to a sentinel inside the container; without it the variable is not
+            # populated at all and the name here only declares which variable this
+            # credential corresponds to.
+            #
+            # Leaving it unset is what keeps the subscription path working. Claude
+            # Code resolves auth in a fixed order and an ANTHROPIC_API_KEY in the
+            # environment outranks the OAuth credentials file the block below
+            # writes — so a sentinel parked in that variable would shadow a bound
+            # subscription on every sandbox, and the session would authenticate as
+            # a console API key that may not exist. The sentinel Claude Code is
+            # meant to send arrives by a different route: `apiKeyHelper` in
+            # ~/.claude/settings.json (seeded by the install hook below) echoes
+            # `proxy-managed`, and the inject rules here swap the real value in at
+            # request time.
+            name: ANTHROPIC_API_KEY
+            # All four domains are in this phase's allow list above, so all four
+            # rules survive the migration. (The built-in this kit was extracted
+            # from declared console.anthropic.com and claude.ai rules its own
+            # allowlist never admitted — dead config that v3's inject-within-allow
+            # validation would have surfaced. This kit widened the allowlist
+            # instead, before the migration, so there is nothing to drop here.)
+            inject:
+                - {domain: api.anthropic.com, header: x-api-key, format: "%s"}
+                - {domain: console.anthropic.com, header: x-api-key, format: "%s"}
+                - {domain: claude.ai, header: x-api-key, format: "%s"}
+                - {domain: mcp-proxy.anthropic.com, header: x-api-key, format: "%s"}
+        # For a host whose stored anthropic credential is a Claude subscription
+        # rather than a console API key. The block is entirely declarative: the
+        # token endpoint, the sentinel values the proxy substitutes at request
+        # time, and the file the engine renders into the container. Nothing in
+        # the container implements any of it, and the container never holds a
+        # usable token — it holds the two sentinels, and the proxy swaps them per
+        # request and re-masks refresh responses with the same values.
+        oauth:
+            tokenEndpoint: {host: platform.claude.com, path: /v1/oauth/token}
+            sentinels:
+                accessToken: sk-ant-oat01-proxy-managed
+                refreshToken: sk-ant-ort01-proxy-managed
+            # MIGRATION NOTE: v2 wrote this as a Go template rather than the
+            # declarative map, and said so deliberately — `primaryApiKey` is
+            # emitted only when the host also holds an API key minted from the
+            # subscription, and v2's `structure:` had no way to express a
+            # conditional key. v3's vocabulary does: `{{.PrimaryApiKey}}` is
+            # specified as "a string whose enclosing key is omitted when no key is
+            # captured", which is exactly what the template's `{{if .PrimaryApiKey}}`
+            # guard did. So the reason for keeping the template no longer holds and
+            # the map is used. `{{.ExpiresAt}}` renders as a JSON number and
+            # `{{.Scopes}}` as a JSON array (v2 spelled the latter `{{.ScopesJSON}}`
+            # because a template had to pick the encoding itself), and the
+            # structure is JSON-encoded after substitution, so the output is
+            # well-formed no matter what the values contain.
+            credentialFile:
+                path: ~/.claude/.credentials.json
+                structure:
+                    claudeAiOauth:
+                        accessToken: "{{.AccessToken}}"
+                        refreshToken: "{{.RefreshToken}}"
+                        expiresAt: "{{.ExpiresAt}}"
+                        scopes: "{{.Scopes}}"
+                    primaryApiKey: "{{.PrimaryApiKey}}"
+                    # MIGRATION NOTE: v2's `oauth.skipIfEnv: [ANTHROPIC_API_KEY]` is dropped.
+                    # v3 has no counterpart by design — mode resolution is binding-driven,
+                    # which is what v2's own comment already recorded this field as being for
+                    # a schemaVersion "2" credential: a no-op kept only to minimize a diff
+                    # against the built-in spec. Nothing observable changes.
+    # Volumes persist across container recreation. With deterministic volume
+    # naming, the same sandbox name reattaches to the same volumes on recreate —
+    # so Claude Code's session state survives `sbx kit add` and other
+    # recreate-shaped operations. Subdirectories are mounted rather than all of
+    # ~/.claude/, so kit-managed files like settings.json and .credentials.json
+    # keep coming from the image and the OAuth hook on every create.
+    #
+    # Every volume must set a size. Block volumes are sparse ext4 images, but the
+    # kernel zeroes ext4's inode tables shortly after first mount, so an unsized
+    # volume inheriting the block driver's 50 GiB default costs ~800 MiB of host
+    # space while empty.
+    #
+    # 512m is the floor worth using, not a generous rounding: mke2fs picks
+    # inode_ratio from the volume size, and below 512 MiB it switches to the
+    # "small" profile at one inode per 4 KiB instead of one per 16 KiB. A 512m
+    # volume therefore has the same 8 MiB of inode tables as a 128m one, and half
+    # that of a 256m one.
+    - type: com.docker.sandbox/volume@1
+      description: Conversation transcripts; grows without bound, so it gets the headroom
+      config: {path: /home/agent/.claude/projects, size: 2g}
+    - type: com.docker.sandbox/volume@1
+      description: Per-session state JSON; load-bearing for `claude -c`
+      config: {path: /home/agent/.claude/sessions, size: 512m}
+    - type: com.docker.sandbox/volume@1
+      description: TodoWrite state
+      config: {path: /home/agent/.claude/todos, size: 512m}
+    - type: com.docker.sandbox/volume@1
+      description: Bash state across sessions — one snapshot per shell session
+      config: {path: /home/agent/.claude/shell-snapshots, size: 512m}
+    - type: com.docker.sandbox/volume@1
+      description: Local feature-flag cache; the telemetry switch suppresses event reporting, not these gate lookups
+      config: {path: /home/agent/.claude/statsig, size: 512m}
+
+    # --- shared ai-memory block -----------------------------------------------
+    # Duplicated in the Claude and Codex kits: a v3 set may list only published
+    # kit images, so it cannot be factored into a local shared kit.
+    # scripts/verify-kits.sh asserts the copies stay in agreement. The
+    # environment it relies on (AI_MEMORY_DATA_DIR, GOMODCACHE, GOCACHE) is ENV
+    # in the Dockerfile's common stage.
+    - type: com.docker.sandbox/volume@1
+      description: ai-memory store
+      config: {path: /var/lib/ai-memory, size: 5g, mode: "0755"}
+    - type: com.docker.sandbox/volume@1
+      description: Go module and build caches
+      config: {path: /var/lib/go, size: 10g, mode: "0755"}
+
+    # One lifecycle@1 per kit (it is a singleton): the claude hooks first, as
+    # the published kit runs them, then this kit's.
+    - type: com.docker.sandbox/lifecycle@1
+      config:
+        install:
+            # --- from docker/sbx-kit-claude:2.1.267 ---------------------------
+            # ~/.claude.json carries the bypass/onboarding/trust flags and is
+            # credential-independent. It needs a command rather than a `files:`
+            # entry for two reasons: the content is conditional — the `projects`
+            # map gains a second entry only when WORKSPACE_DIR is not "/", and the
+            # path has to be JSON-escaped — which `files:` cannot express, since
+            # its content is expanded for kit args and nothing else; and a
+            # `files:` entry can only create-or-skip, so an `overwrite: false`
+            # guard would silently leave the flags unset against a file that
+            # already exists, and Claude Code then prompts "Is this a project you
+            # trust?" at startup instead of rendering its TUI. Writing as root +
+            # chown always overwrites whatever is there, whoever owns it. Content
+            # is deterministic for a given WORKSPACE_DIR, so the rewrite is
+            # idempotent.
+            - command: |
+                set -e
+                ws="${WORKSPACE_DIR:-/}"
+                esc=$(printf '%s' "$ws" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g; s/\r/\\r/g')
+                projects="\"/\": { \"hasTrustDialogAccepted\": true }"
+                [ "$ws" = "/" ] || projects="$projects, \"$esc\": { \"hasTrustDialogAccepted\": true }"
+                printf '%s\n' "{
+                  \"bypassPermissionsModeAccepted\": true,
+                  \"hasCompletedOnboarding\": true,
+                  \"projects\": { $projects }
+                }" > /home/agent/.claude.json
+                chown agent:agent /home/agent/.claude.json
+              user: "0"
+              env: [WORKSPACE_DIR]
+              description: Seed Claude bypass/trust flags (root; overwrites image-shipped file)
+            # Seed ~/.claude/settings.json, branching on the auth mode surfaced via
+            # the SBX_CRED_ANTHROPIC_MODE container env var (the engine derives it
+            # from the host-side credential signal). apiKeyHelper="echo
+            # proxy-managed" is included only when a credential resolved (mode !=
+            # none); without it Claude Code prompts for /login. settings.json is
+            # kit-managed and rewritten unconditionally on every (re)create, so it
+            # always reflects the current SBX_CRED_ANTHROPIC_MODE (a mode change on
+            # recreate is picked up). Content is deterministic from the mode, so
+            # the rewrite is idempotent. The bypass/trust flags live in
+            # ~/.claude.json (seeded by the root install command above).
+            #
+            # defaultMode must sit under "permissions": Claude Code reads only
+            # permissions.defaultMode and silently ignores the key elsewhere.
+            # skipDangerousModePermissionPrompt is seeded rather than left to
+            # Claude Code's deprecated ~/.claude.json migration, which otherwise
+            # writes it here.
+            #
+            # jarvis-engineer change: merged into the existing file instead of
+            # replacing it. This image bakes settings.json with the kit's
+            # attribution keys and the plugin keys (enabledPlugins,
+            # extraKnownMarketplaces); the published hook's `printf >` would
+            # drop them. The keys the published hook sets are still set, and
+            # apiKeyHelper is removed when no credential resolved.
+            - command: |
+                set -e
+                mkdir -p /home/agent/.claude
+                node -e '
+                  const fs = require("fs");
+                  const file = "/home/agent/.claude/settings.json";
+                  let s = {};
+                  if (fs.existsSync(file)) s = JSON.parse(fs.readFileSync(file, "utf8"));
+                  s.themeId = 1;
+                  s.alwaysThinkingEnabled = true;
+                  s.permissions = Object.assign({}, s.permissions, {defaultMode: "bypassPermissions"});
+                  s.bypassPermissionsModeAccepted = true;
+                  s.skipDangerousModePermissionPrompt = true;
+                  if ((process.env.SBX_CRED_ANTHROPIC_MODE || "none") !== "none") s.apiKeyHelper = "echo proxy-managed";
+                  else delete s.apiKeyHelper;
+                  fs.writeFileSync(file, JSON.stringify(s, null, 2) + "\n");
+                '
+              user: agent
+              env: [SBX_CRED_ANTHROPIC_MODE]
+              description: Seed Claude settings.json from SBX_CRED_ANTHROPIC_MODE, keeping baked keys
+            # Gateway-first MCP registration, seeded at INSTALL time so it is
+            # race-free. Install hooks complete during create, BEFORE the CLI
+            # attaches and launches the interactive `claude` session. Registering
+            # here (rather than only in startup) closes a race: startup hooks are
+            # fired by a DETACHED dispatcher, so a startup-time `claude mcp add`
+            # could land AFTER the session has already read the user config —
+            # leaving the agent with no gateway ("no connection").
+            #
+            # MCP_GATEWAY_URL / MCP_SENTINEL_TOKEN_NAME are injected into the
+            # container env at create time, so they are present here — and in v3
+            # they have to be named in `env:` as well, or the hook would not see
+            # them. The sentinel name is a stable constant and the gateway URL is a
+            # portless alias, so the entry stays valid across stop/start without
+            # re-running. The sentinel is not a credential — the proxy substitutes
+            # the real token at request time, keyed by this name.
+            #
+            # --scope user writes the entry to the user-level Claude config, so it
+            # is visible from every workspace regardless of the session's cwd and
+            # does not depend on any workspace directory existing at registration
+            # time.
+            #
+            # `claude mcp add` is NOT an idempotent rewrite: re-adding an existing
+            # name always exits 1 ("already exists in user config"), so `|| true`
+            # here matches the startup fallback below. This matters beyond simple
+            # restarts: the swap-container recreate path behind `sbx kit add` and
+            # `--model` commits and reuses the previous container's writable
+            # filesystem layer, so install hooks rerun against a filesystem that
+            # may already carry the entry forward in ~/.claude/.config.json — a
+            # second, higher-priority config file that shadows ~/.claude.json and
+            # is untouched by this kit's own install hooks (it is only written by
+            # hooks and mixins that run after this one). Without `|| true` that
+            # collision fails the entire swap.
+            #
+            # PATH is exported explicitly rather than trusted: the image puts
+            # ~/.local/bin on PATH, but ~/.claude/local is the older install layout
+            # a re-pointed BASE_IMAGE might still use.
+            - command: |
+                set -e
+                [ -n "$MCP_GATEWAY_URL" ] || exit 0
+                export PATH="$HOME/.local/bin:$HOME/.claude/local:$PATH"
+                claude mcp add mcp-gateway "$MCP_GATEWAY_URL" \
+                  --transport http \
+                  --scope user \
+                  --header "Authorization: Bearer $MCP_SENTINEL_TOKEN_NAME" || true
+              user: agent
+              env: [MCP_GATEWAY_URL, MCP_SENTINEL_TOKEN_NAME]
+              description: Register the sandbox MCP gateway with claude (install-time, race-free)
+            # --- jarvis-engineer ----------------------------------------------
+            # Volumes are mounted before install runs, and install runs as root, so this
+            # is the only place the volume's root:root ownership can be handed over.
+            - command: "chown 1000:1000 /var/lib/ai-memory"
+              user: "0"
+              description: Give the agent user ownership of the memory volume
+
+            - command: "chown 1000:1000 /var/lib/go"
+              user: "0"
+              description: Give the agent user ownership of the Go cache volume
+            # Registrations run here, once at create, rather than at startup:
+            # install hooks finish before the agent first launches, while the
+            # published kits document startup hooks as fired by a detached
+            # dispatcher that can overlap a live session. What they write lives
+            # under /home/agent and survives stop/start. Run as the agent so
+            # they write its config; install hooks default to root.
+            - command: ["ai-memory", "init"]
+              env: [AI_MEMORY_DATA_DIR, AI_MEMORY_AUTH_TOKEN]
+              user: agent
+              description: Create the data directory layout before the registrations below
+
+            # The claude hooks above rewrite ~/.claude.json at create, so MCP and hook
+            # registration cannot be baked into the image and run after them. Both
+            # are idempotent and preserve unrelated entries.
+            - command:
+                ["ai-memory", "install-mcp", "--client", "claude-code", "--apply"]
+              env: [AI_MEMORY_DATA_DIR, AI_MEMORY_AUTH_TOKEN]
+              user: agent
+              description: Register the ai-memory MCP server with Claude Code
+
+            - command:
+                ["ai-memory", "install-hooks", "--agent", "claude-code", "--apply"]
+              env: [AI_MEMORY_DATA_DIR, AI_MEMORY_AUTH_TOKEN]
+              user: agent
+              description: Register ai-memory lifecycle hooks with Claude Code
+
+            # The image bakes the Claude Code plugins, and the settings hook above
+            # merges rather than replaces, but several hooks rewrite
+            # ~/.claude/settings.json; losing `enabledPlugins` or
+            # `extraKnownMarketplaces` leaves every plugin disabled. This merges the
+            # baked keys back in, after install-hooks, so the last writer of that file
+            # is not the one that could drop them. Wrapped so a failure only warns: a
+            # failing hook stops every later one.
+            - command:
+                [
+                  "sh",
+                  "-c",
+                  "restore-claude-plugins || echo 'plugins: could not restore the baked plugin settings' >&2; exit 0",
+                ]
+              user: agent
+              description: Re-enable the plugins baked into the template
+
+            # The status line is settings-only state, registered after
+            # restore-claude-plugins so the last writer of settings.json is the one
+            # holding every key. The label itself comes from /home/agent/.jarvis-role,
+            # baked from the kit. Wrapped so a failure only warns: a failing hook
+            # stops every later one.
+            - command:
+                [
+                  "sh",
+                  "-c",
+                  "jarvis-statusline --install || echo 'statusline: could not register the status line' >&2; exit 0",
+                ]
+              user: agent
+              description: Register the role status line with Claude Code
+
+            # --- postgres --------------------------------------------------------
+            # Microsoft's postgres-mcp. Headless it reads one connection string from
+            # POSTGRES_MCP_CONNECTION_STRING (no OS keyring in the sandbox), which
+            # carries the password: it is deliberately NOT passed with -e, the server
+            # inherits it from the sandbox environment. Put host.docker.internal in the
+            # string; 127.0.0.1 would be the sandbox itself. Supply it at creation time
+            # (sbx create --env-file .env ...), using a read-only database role.
+            #
+            # The env-var connection has no documented read-only switch, so the write
+            # tools are denied in ~/.claude/settings.json instead. The denial is merged
+            # here, in the same step as the registration, so no later rewrite of that
+            # file can separate them. --no-telemetry: the sandbox has no route for it.
+            # Runs before the mysql step so that stays the last registration step
+            # verify-sandbox-claude.sh polls for.
+            - command:
+                - "sh"
+                - "-c"
+                - |
+                  CLAUDE=/home/agent/.local/bin/claude
+                  [ -x "$CLAUDE" ] || CLAUDE=$(command -v claude 2>/dev/null)
+
+                  if [ -z "$POSTGRES_MCP_CONNECTION_STRING" ]; then
+                    echo "postgres: POSTGRES_MCP_CONNECTION_STRING unset, skipping registration (pass --env-file)" >&2
+                    exit 0
+                  fi
+                  if [ -z "$CLAUDE" ]; then
+                    echo "postgres: claude CLI not found, skipping registration" >&2
+                    exit 0
+                  fi
+
+                  "$CLAUDE" mcp remove -s user postgres >/dev/null 2>&1
+                  "$CLAUDE" mcp add -s user postgres \
+                    -- npx -y @microsoft/postgres-mcp run --no-telemetry \
+                    || echo "postgres: MCP registration failed" >&2
+
+                  node -e '
+                    const fs = require("fs");
+                    const path = require("path");
+                    const file = path.join(process.env.HOME, ".claude", "settings.json");
+                    let settings = {};
+                    if (fs.existsSync(file)) settings = JSON.parse(fs.readFileSync(file, "utf8"));
+                    else fs.mkdirSync(path.dirname(file), {recursive: true});
+                    const deny = [
+                      "mcp__postgres__postgres_mcp_modify",
+                      "mcp__postgres__postgres_mcp_bulk_load_csv",
+                      "mcp__postgres__postgres_mcp_add_connection",
+                    ];
+                    settings.permissions = settings.permissions || {};
+                    settings.permissions.deny = [...new Set([...(settings.permissions.deny || []), ...deny])];
+                    fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+                  ' || echo "postgres: could not deny the write tools" >&2
+
+                  # A non-zero exit from any startup step silently aborts every later
+                  # step, so this must always succeed.
+                  exit 0
+              env: [POSTGRES_MCP_CONNECTION_STRING]
+              user: agent
+              description: Register the Postgres MCP server with Claude Code and deny its write tools
+
+            # --- mysql -----------------------------------------------------------
+            # The MCP server dials host.docker.internal:3306 directly -- the allowlist
+            # above names that host. Registered here rather than baked into the image
+            # because the claude hooks above rewrite ~/.claude.json. MYSQL_USER/MYSQL_PASS
+            # are deliberately NOT passed with -e: the server inherits them from the
+            # sandbox environment, so the password never lands in a config file. Supply
+            # them at creation time:
+            #   make sandbox claude   (sbx create --env-file .env ./build/kits/jarvis-engineer .)
+            - command:
+                - "sh"
+                - "-c"
+                - |
+                  # Startup steps run with a narrower PATH than an interactive shell or
+                  # `sbx exec`: it omits ~/.local/bin, where the claude CLI lives, so a
+                  # bare `claude` here exits 127. Prefer the stable symlink over the
+                  # versioned binary it points at.
+                  CLAUDE=/home/agent/.local/bin/claude
+                  [ -x "$CLAUDE" ] || CLAUDE=$(command -v claude 2>/dev/null)
+
+                  if [ -z "$MYSQL_USER" ]; then
+                    echo "mysql: MYSQL_USER unset, skipping registration (pass --env-file)" >&2
+                    exit 0
+                  fi
+                  if [ -z "$CLAUDE" ]; then
+                    echo "mysql: claude CLI not found, skipping registration" >&2
+                    exit 0
+                  fi
+
+                  "$CLAUDE" mcp remove -s user mysql >/dev/null 2>&1
+                  "$CLAUDE" mcp add -s user mysql \
+                    -e MYSQL_HOST=host.docker.internal \
+                    -e MYSQL_PORT=3306 \
+                    -e ALLOW_INSERT_OPERATION=false \
+                    -e ALLOW_UPDATE_OPERATION=false \
+                    -e ALLOW_DELETE_OPERATION=false \
+                    -e ALLOW_DDL_OPERATION=false \
+                    -- npx -y @benborla29/mcp-server-mysql \
+                    || echo "mysql: MCP registration failed" >&2
+
+                  # A non-zero exit from any startup step silently aborts every later
+                  # step, so this must always succeed.
+                  exit 0
+              env: [MYSQL_USER]
+              user: agent
+              description: Register the read-only MySQL MCP server with Claude Code
+
+        startup:
+            # --- from docker/sbx-kit-claude:2.1.267 ---------------------------
+            # Re-own the kit-declared session-state volume mount roots to the agent
+            # user. Block volumes (~/.claude/projects, sessions, todos,
+            # shell-snapshots, statsig) mount with a root-owned root because they
+            # are formatted as ext4 — the image's directory ownership is shadowed
+            # by the mount, and the image's own USER is `agent`, so any chown it
+            # could run would be a no-op. Running this as user:"0" here (after the
+            # volumes are mounted, before any agent activity) is what makes
+            # ~/.claude writable for the agent user, including in the swap
+            # container produced by `sbx kit add`.
+            #
+            # Enumerated, not recursive over ~/.claude: the parent holds
+            # runtime-managed content this kit does not own, and the five paths
+            # below are exactly the ones it declares as volumes.
+            - command: ["sh", "-c", "chown -R agent:agent /home/agent/.claude/projects /home/agent/.claude/sessions /home/agent/.claude/todos /home/agent/.claude/shell-snapshots /home/agent/.claude/statsig 2>/dev/null || true"]
+              user: "0"
+              description: Re-own claude session-state volume mount roots to agent (block-volume mkfs trap)
+            # MIGRATION NOTE: v2 backgrounded this with a trailing `&` and had to
+            # explain why the redirects sat on the outer group — a backgrounded job
+            # inheriting the exec's pipe write ends keeps it from reaching EOF, and
+            # a slow apt-get then timed out the exec. v3 has `background: true`, so
+            # detaching is the runtime's job and the shell trick is gone. The
+            # redirects stay because they still discard the output; `</dev/null` is
+            # kept so the command cannot block on stdin whichever way the runtime
+            # detaches it.
+            - command: ["sh", "-c", "{ command -v apt-get && apt-get update -qq -y || true; } >/dev/null 2>&1 </dev/null"]
+              user: "root"
+              background: true
+              description: Update apt package cache in background
+            # Gateway-first MCP registration FALLBACK. The gateway is normally
+            # seeded at install time before the session starts, which is race-free;
+            # this startup entry re-registers defensively in case the install-time
+            # seed could not run.
+            #
+            # It must NOT remove-then-add: startup hooks run via a detached
+            # dispatcher that can fire concurrently with the live session, and a
+            # `claude mcp remove` would briefly delete the entry out from under it.
+            # `claude mcp add … || true` is non-destructive — when the gateway is
+            # already registered (the common, install-seeded case) `add` exits 1
+            # ("already exists in user config"; it is NOT an idempotent rewrite)
+            # and `|| true` swallows that, so the existing entry is left alone
+            # rather than taken away. No-op entirely when MCP is not enabled
+            # ($MCP_GATEWAY_URL empty).
+            - command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  [ -n "$MCP_GATEWAY_URL" ] || exit 0
+                  export PATH="$HOME/.local/bin:$HOME/.claude/local:$PATH"
+                  claude mcp add mcp-gateway "$MCP_GATEWAY_URL" \
+                    --transport http \
+                    --scope user \
+                    --header "Authorization: Bearer $MCP_SENTINEL_TOKEN_NAME" || true
+              user: agent
+              env: [MCP_GATEWAY_URL, MCP_SENTINEL_TOKEN_NAME]
+              description: Register the sandbox MCP gateway with claude (startup fallback)
+    # Claude Code reads CLAUDE.md from the project root every session, so this is
+    # the filename composed kit context has to land in for the agent to pick it
+    # up. `filename` is workload-only: it names the profile this kit owns, which
+    # is why claude-mixin carries the body alone.
+            # --- jarvis-engineer ----------------------------------------------
+            # The store now outlives the container, so a serve lock can survive an
+            # unclean stop. Every start is a fresh PID namespace, so any lock still on
+            # the volume at this point is by definition stale.
+            - command:
+                [
+                  "sh",
+                  "-c",
+                  "rm -f /var/lib/ai-memory/.serve.lock /var/lib/ai-memory/.serve.lock.holder",
+                ]
+              description: Clear a serve lock left behind by an unclean shutdown
+
+            - command: ["ai-memory", "init"]
+              env: [AI_MEMORY_DATA_DIR, AI_MEMORY_AUTH_TOKEN]
+              description: Ensure the data directory layout exists
+
+            # Must be backgrounded: startup steps run sequentially to completion, so a
+            # foreground server would block sandbox startup forever.
+            - command:
+                [
+                  "ai-memory",
+                  "serve",
+                  "--transport",
+                  "http",
+                  "--bind",
+                  "127.0.0.1:49374",
+                ]
+              background: true
+              env: [AI_MEMORY_DATA_DIR, AI_MEMORY_AUTH_TOKEN]
+              description: Run the ai-memory MCP server on loopback
+
+            # `background: true` means the agent could launch while the server is
+            # still binding. `sbx create` returns only after the startup steps ran, so
+            # on create this poll gates the agent on readiness; on a later start, sbx
+            # may attach while steps still run (unverified), and the agent's MCP client
+            # retries. A persistent store may have a bearer token file; use it when
+            # present. Bounded and always exits 0: a server that never comes up must
+            # degrade to "memory unavailable", not "sandbox will not start".
+            - command:
+                - "sh"
+                - "-c"
+                - |
+                  request() {
+                    auth_token="$AI_MEMORY_AUTH_TOKEN"
+                    if [ -z "$auth_token" ] && [ -s "$AI_MEMORY_DATA_DIR/auth-tokens/default" ]; then
+                      auth_token=$(cat "$AI_MEMORY_DATA_DIR/auth-tokens/default")
+                    fi
+                    if [ -n "$auth_token" ]; then
+                      curl -fsS -o /dev/null -X POST -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -H "Authorization: Bearer $auth_token" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"startup","version":"0"}}}' http://127.0.0.1:49374/mcp
+                    else
+                      curl -fsS -o /dev/null -X POST -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"startup","version":"0"}}}' http://127.0.0.1:49374/mcp
+                    fi
+                  }
+                  for i in $(seq 1 30); do
+                    request && exit 0
+                    sleep 1
+                  done
+                  echo 'ai-memory: server not ready after 30s; continuing without memory' >&2
+                  exit 0
+              env: [AI_MEMORY_DATA_DIR, AI_MEMORY_AUTH_TOKEN]
+              description: Wait for the ai-memory server to accept MCP requests
+
+            # --- private Go modules ------------------------------------------------
+            # Only when the sandbox was created with GOPRIVATE and GOPRIVATE_GIT_TOKEN
+            # (sbx create --env-file .env). The helper reads the token from the
+            # environment each time git asks, so no token value is ever written into
+            # ~/.gitconfig. Always exits 0: a non-zero startup step silently aborts
+            # every later step.
+            - command:
+                - "sh"
+                - "-c"
+                - |
+                  if [ -n "$GOPRIVATE" ] && [ -n "$GOPRIVATE_GIT_TOKEN" ]; then
+                    git config --global credential.https://github.com.helper \
+                      '!f() { echo username=x-access-token; echo "password=$GOPRIVATE_GIT_TOKEN"; }; f' \
+                      || echo "go: could not register the git credential helper" >&2
+                  fi
+                  exit 0
+              env: [GOPRIVATE, GOPRIVATE_GIT_TOKEN]
+              description: Let git read private Go modules with a token from the environment
+
+    # --- from docker/sbx-kit-claude:2.1.267 -----------------------------------
+    - type: com.docker.sandbox/agent-context@1
+      # MIGRATION NOTE: no agent-sessions@1. The capability is only declared where
+      # the v2 kit already recorded a working non-interactive invocation, and this
+      # kit's testdata/tck.yaml deliberately omitted `promptArgs` — not because the
+      # invocation was in doubt (`claude -p <prompt>` is the documented form) but
+      # because the e2e prompt subtest reaches Anthropic's hosted API and no
+      # anthropic credential exists on the runner. Declaring the verbs here would
+      # state a control surface this repo has never exercised. Add it together with
+      # the credential, not before it.
+      #
+      # MIGRATION NOTE: no agent-skills@1 either. The v2 kit neither declared nor
+      # documented a skills directory, and the path is permission surface — an
+      # invented one would widen the grant past anything v2 asked for. (The
+      # built-in's own v3 migration in runtime-kits/examples/claude does declare
+      # ~/.claude/skills; that is a declaration this kit has never made.)
+
+      config:
+        filename: CLAUDE.md
+        # Relative to the kit directory: the frontend reads it from the build
+        # context. A copy of the published kit's file, re-copy it on a pin bump.
+        contentFile: claude-context.md

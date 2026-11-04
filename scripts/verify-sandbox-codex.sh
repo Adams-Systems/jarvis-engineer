@@ -47,6 +47,38 @@ check() {
 	fi
 }
 
+# session_args -- the argv of the agent process, read while a TTY session is
+# attached (see verify-sandbox-claude.sh).
+session_args() {
+	local pid args='' i
+
+	if script --version >/dev/null 2>&1; then
+		script -qec "sbx run --name $SANDBOX" /dev/null >/dev/null 2>&1 &
+	else
+		script -q /dev/null sbx run --name "$SANDBOX" >/dev/null 2>&1 &
+	fi
+	pid=$!
+	for i in $(seq 1 30); do
+		args="$(sbx exec "$SANDBOX" -- sh -c 'ps -eo args | grep -E "^(node [^ ]*/)?codex " | head -n 1' 2>/dev/null)"
+		[[ -n "$args" ]] && break
+		sleep 1
+	done
+	kill "$pid" 2>/dev/null
+	wait "$pid" 2>/dev/null
+	printf '%s' "${args:-<no agent process>}"
+}
+
+# expect <name> <expected-substring> <actual> -- for values read on the host.
+expect() {
+	if [[ "$3" == *"$2"* ]]; then
+		printf 'ok   %s\n' "$1"
+		pass=$((pass + 1))
+	else
+		printf 'FAIL %s\n     want substring: %s\n     got: %s\n' "$1" "$2" "${3:-<empty>}"
+		fail=$((fail + 1))
+	fi
+}
+
 printf '== live Codex sandbox acceptance: %s ==\n' "$SANDBOX"
 
 # Startup steps complete asynchronously after `sbx create` returns, so poll for
@@ -228,6 +260,29 @@ check 'daemon is the sandbox-local engine, not the host' \
 check 'compose plugin reaches the nested engine' \
 	'NAME' \
 	'docker compose ls 2>&1'
+
+# --- launch -------------------------------------------------------------
+# The model pin is the recipe's Cmd; without it Codex falls back to a model the
+# account rejects, which no other case here would notice.
+expect 'agent launches with the pinned model' \
+	'--model gpt-5.6-terra' \
+	"$(session_args)"
+
+# --- restart ------------------------------------------------------------
+# Startup steps re-run on every start against volumes that kept their state.
+# `sbx exec` starts a stopped sandbox and returns once its startup steps ran.
+sbx stop "$SANDBOX" >/dev/null 2>&1
+check 'after a restart, exactly one ai-memory server runs' \
+	'servers=1' \
+	'for i in $(seq 1 30); do
+		curl -s -o /dev/null --max-time 2 http://127.0.0.1:49374/mcp && break
+		sleep 1
+	done
+	echo "servers=$(ps -eo args | grep -c "^ai-memory serve")"'
+
+check 'after a restart, Codex still lists both MCP servers' \
+	'ai-memory mysql' \
+	"$CODEX mcp list 2>&1 | awk '\$1 == \"ai-memory\" || \$1 == \"mysql\" { print \$1 }' | sort | paste -sd ' ' -"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

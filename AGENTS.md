@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `jarvis-engineer` builds Docker sandbox **template images** for running an engineer agent from one
 set of content, in two kits: `agent/claude/` for Claude Code and `agent/codex/` for Codex. Both carry an
 orchestrator persona plus seven sub-agents — coder, refactorer, reviewer, expert, investigator,
-planner, and architect — and an `sbx` sandbox spec (`spec.yaml`) that provisions the sandbox:
+planner, and architect — and an `sbx` kit descriptor (sandbox-kit v3, `agent/<agent>/<kit-name>.yaml`) that provisions the sandbox:
 network allowlist, an `ai-memory` MCP server on a persistent volume, a read-only MySQL MCP
 server reached on the host, and Microsoft's `postgres-mcp` (read-only by denied tools). The Claude kit adds three specialized reviewers (security, code,
 database) that replace `jarvis-reviewer` there; the Codex kit does not have them.
@@ -38,20 +38,22 @@ Makefile stops at parse time with `usage: make <verb> claude|codex`. Bare `make`
   `Dockerfile`, `--target <agent>`)
 - `make verify-image claude|codex` — static acceptance checks against the built image
   (`scripts/verify-image-claude.sh` / `scripts/verify-image-codex.sh`)
-- `make verify-kits` — static acceptance checks against every `agent/*/spec.yaml` (`scripts/verify-kits.sh`)
+- `make verify-kits` — acceptance checks against every kit descriptor (`scripts/verify-kits.sh`); it
+  stages and builds each kit through `sbx`, so it needs `docker` and `sbx`
 - `make sync` — regenerate both kits' content from `shared/` (`scripts/sync-agents.sh`)
 - `make verify-sync` — generator tests, then fail if the committed kit content differs from `shared/`
 - `make verify-make` — tests for the Makefile's agent dispatch (`scripts/test-make-dispatch.sh`); it
   uses `make -n` and stub `docker`/`sbx`, so it needs neither
 - `make verify` — `verify-sync`, `verify-make`, `verify-kits`, then `verify-image` for both agents
-- `make template claude|codex` — build + verify the image, then save/load it into `sbx` as a
-  reusable template
-- `make sandbox claude|codex [SANDBOX=name]` — (re)create a named sandbox from the agent's kit
-  (`agent/claude/` or `agent/codex/`; default names `jarvis-engineer` / `jarvis-engineer-codex`), reading
-  MySQL credentials from `.env`, then run `scripts/verify-sandbox-claude.sh` /
-  `scripts/verify-sandbox-codex.sh` against it
+- `make template claude|codex` — build + verify the image, then stage the kit and build it into
+  `sbx`'s kit cache (`sbx kit inspect`), so a later `make sandbox` with the same sources skips the build
+- `make sandbox claude|codex [SANDBOX=name]` — stage the agent's kit into `build/kits/<kit-name>/`
+  and (re)create a named sandbox from it (default names `jarvis-engineer` / `jarvis-engineer-codex`),
+  reading credentials from `.env`, then run `scripts/verify-sandbox-claude.sh` /
+  `scripts/verify-sandbox-codex.sh` against it. It creates the `kit-builder` buildx builder
+  (`docker-container` driver) when it is missing
 - `make verify-sandbox claude|codex [SANDBOX=name]` — live checks against an already-running sandbox
-- `make clean` — remove the build tarballs
+- `make clean` — remove the staged kits (`build/kits/`)
 
 `sandbox` starts with `sbx rm --force` on the target name, so pass a throwaway `SANDBOX=` to check a
 change without replacing a sandbox you work in.
@@ -60,7 +62,11 @@ Running the verify scripts directly:
 
 - `./scripts/verify-image-claude.sh [image]` — needs `docker`, `jq`
 - `./scripts/verify-image-codex.sh [image]` — needs `docker`
-- `./scripts/verify-kits.sh` — needs the `sbx` CLI (runs `sbx kit validate` / `sbx kit inspect` per kit)
+- `./scripts/verify-kits.sh` — needs `docker` and the `sbx` CLI (stages each kit and runs
+  `sbx kit validate` / `sbx kit inspect` on it with `BUILDX_BUILDER=kit-builder`)
+- `./scripts/stage-kit.sh claude|codex [out-root]` — assemble a kit's build context (default
+  `build/kits/`) and print its directory; needs only bash and POSIX tools
+- `./scripts/test-stage-kit.sh` — its acceptance tests, same needs
 - `./scripts/sync-agents.sh [--check] [--root DIR]` — needs only bash and POSIX tools
 - `./scripts/test-sync-agents.sh [filter]` — the generator's acceptance tests, same needs
 - `./scripts/test-make-dispatch.sh` — the Makefile dispatch tests, needs only `make` and bash
@@ -70,7 +76,9 @@ Running the verify scripts directly:
 `.dockerignore` excludes `scripts/` and then re-includes only the scripts the images install
 (`install-agent-skills.sh`, `install-claude-plugins.sh`, `install-mcp-packages.sh`, `restore-claude-plugins.sh`, `jarvis-statusline.sh`,
 `trust-codex-hooks.js`); a new script the `Dockerfile` `COPY`s fails the build with "not found" until it
-is listed there too.
+is listed there too. `scripts/stage-kit.sh` reads the same list to decide which scripts go into a
+staged kit, so it is the one place to add one. `**/.DS_Store` is excluded because the images `COPY`
+the kit homes.
 
 Under Claude Code's macOS Seatbelt sandbox, writes into `agent/claude/files/home/.claude/` are denied, so
 `make sync` has to run outside it; the generator exits 2 (it used to report success) when it
@@ -83,16 +91,20 @@ modules it can also hold `GOPRIVATE` (and `GONOSUMDB`/`GOFLAGS` if needed) and `
 (a GitHub token); a startup step then registers a git credential helper that reads the token from the
 environment, so the token is never written to `~/.gitconfig`. It is only ever
 passed with `--env-file .env` at `sbx create` time — never baked into the image or written into a
-kit spec.
+kit descriptor.
 
 ## Architecture
 
 ### Image (`Dockerfile`, targets `claude` and `codex`)
 
 One multi-stage `Dockerfile` builds both images. `ARG AGENT` selects the base:
-`base-claude` is `docker/sandbox-templates:claude-code-docker` (a real nested Docker daemon, not just
-the CLI), `base-codex` is `docker/sandbox-templates:codex-docker` (node, npm and the `codex` CLI
-already installed). The `common` stage is `FROM base-${AGENT}`; the `claude` and `codex` stages are
+`base-claude` is Docker's published v3 Claude kit `docker.io/docker/sbx-kit-claude:2.1.267` and
+`base-codex` its Codex kit `docker.io/docker/sbx-kit-codex:0.155.1`, each pinned by index digest
+(sbx refuses unpinned published kits). Both are built on `docker/sandbox-templates:shell-docker`, so
+they carry a real nested Docker daemon and the `com.docker.sandboxes.start-docker` label, plus go,
+node 22 and the agent CLI (`claude` in `~/.local/bin`, `codex` also under the npm-global prefix), and
+set the agent's `ENTRYPOINT`. A recipe built `FROM` a kit does not inherit its descriptor, which is
+why each kit descriptor restates the capabilities it still needs (see "Kit" below). The `common` stage is `FROM base-${AGENT}`; the `claude` and `codex` stages are
 `FROM common` and add the agent-specific layers. `make build <agent>` passes `--target` and `AGENT`
 together, and each final stage fails if the two disagree. `AGENT` defaults to the sentinel
 `missing`, whose `base-missing` stage exits 1, so a bare `docker build .` fails rather than guessing
@@ -112,24 +124,34 @@ The `common` stage installs, as root:
   `npm install -g --engine-strict` (a package whose `engines.node` the base does not meet fails the
   build) and then asserts each package is on disk. Today: `@benborla29/mcp-server-mysql@2.0.9` and
   `@microsoft/postgres-mcp` (unpinned until a release is chosen). Adding a server here only
-  installs it: registering it with the agent is still a startup step in each kit's `spec.yaml`
+  installs it: registering it with the agent is still a startup step in each kit descriptor
 - `golangci-lint`
 - a C toolchain (`gcc`, `libc6-dev`) with `CGO_ENABLED=1`: Go switches cgo off when it finds no C
   compiler, and `go test -race` needs cgo
 - Go tools on `PATH` via `go install`: `govulncheck`, `gotestsum`, `dlv`, `mockgen`, `swag`,
   `goimports`. Their version ARGs default to `latest`; pin them to make rebuilds reproducible
+- last, `ENV AI_MEMORY_DATA_DIR=/var/lib/ai-memory`, `GOMODCACHE=/var/lib/go/mod` and
+  `GOCACHE=/var/lib/go/cache`: a v3 kit sets its environment in the recipe, and setting them after
+  the build steps keeps those steps out of the volume paths
 
 The `claude` stage adds:
+
+- `agent/claude/files/home/` copied into `/home/agent` (uid 1000), first, so the plugin install
+  merges its keys into the kit's `settings.json`. A v3 kit has no `files/home` injection; sbx keeps
+  the image's home on create, so the image carries the kit content
+- `CMD ["--append-system-prompt-file", "/home/agent/ROLE.md"]`, appended to the base's
+  `claude --dangerously-skip-permissions` entrypoint (sbx v0.51.0 ignored a lifecycle `interactive`
+  tail)
 
 - the Claude Code plugins listed in `config.json`, baked via `scripts/install-claude-plugins.sh`,
   run as the `agent` user (uid 1000) so `installPath` entries in the plugin cache are readable by
   the sandbox's actual runtime user
 - a snapshot of the two settings keys that install writes (`enabledPlugins`,
   `extraKnownMarketplaces`) in `/usr/local/share/jarvis-engineer/plugin-settings.json`, and
-  `scripts/restore-claude-plugins.sh` as `/usr/local/bin/restore-claude-plugins`. This
-  exists because `sbx create` writes `~/.claude/settings.json` from scratch (permissions, model):
-  the plugin _cache_ under `~/.claude/plugins` survives from the image, but the settings keys that
-  load it do not, so without the restore step every baked plugin comes up `"enabled": false`.
+  `scripts/restore-claude-plugins.sh` as `/usr/local/bin/restore-claude-plugins`. Under the v2 kit
+  `sbx create` wrote `~/.claude/settings.json` from scratch and every baked plugin came up
+  `"enabled": false`. Under v3 the kit's own settings hook merges instead, so the restore step is a
+  safety net against the other startup steps that rewrite the file.
 - the third-party skills listed in `config.json` under `skills`, baked into `~/.claude/skills` by
   `scripts/install-agent-skills.sh claude-code` (see "Third-party skills" below)
   The snapshot is taken from the resolved settings rather than derived from `config.json`, because
@@ -138,20 +160,20 @@ The `claude` stage adds:
 - `scripts/jarvis-statusline.sh` as `/usr/local/bin/jarvis-statusline`. It both renders
   the status line (`ROLE | Model | directory | branch`) and, with `--install`, points
   `~/.claude/settings.json` at itself. `statusLine` is settings-only state, so like the plugin
-  keys it is lost on every `sbx create` and has to be re-registered by a startup step; the script
-  it points at must therefore live outside `$HOME`.
+  keys it is re-registered by a startup step.
 
 Every install is asserted at build time (not just "exit 0"), and again by `verify-image-claude.sh`,
-because a sandbox's `~/.claude` is recreated fresh on every `sbx create` — anything installed by
-hand outside the image is lost, so "does it survive a fresh sandbox" is the real bar.
+because anything installed by hand inside a sandbox is lost when it is recreated, so "does it
+survive a fresh sandbox" is the real bar.
 
 ### Codex target
 
-The `codex` stage adds `scripts/install-agent-skills.sh codex` (third-party skills into
-`~/.agents/skills`, see below) and `scripts/trust-codex-hooks.js`, installed as
-`/usr/local/bin/trust-codex-hooks`. Codex runs
-a hook only after its exact definition is trusted (a per-handler hash under `[hooks.state]` in
-`~/.codex/config.toml`), and sbx recreates `~/.codex` per sandbox. The helper asks the installed
+The `codex` stage copies `agent/codex/files/home/` into `/home/agent`, then adds
+`scripts/install-agent-skills.sh codex` (third-party skills into `~/.agents/skills`, see below) and
+`scripts/trust-codex-hooks.js`, installed as `/usr/local/bin/trust-codex-hooks`, and ends with
+`CMD ["--model", "gpt-5.6-terra"]` after the base's `codex --dangerously-bypass-approvals-and-sandbox`
+entrypoint. Codex runs a hook only after its exact definition is trusted (a per-handler hash under
+`[hooks.state]` in `~/.codex/config.toml`), and the kit's install hook rewrites that file per sandbox. The helper asks the installed
 Codex's app-server for the current hashes (`hooks/list`) and trusts only ai-memory's handlers in
 `~/.codex/hooks.json` through `config/batchWrite`, the call Codex's own review UI makes. A handler
 counts as ai-memory's only if its whole command matches ai-memory's form (a command that merely
@@ -169,18 +191,46 @@ user, in the `claude` and `codex` stages, and then asserts that `<dir>/<skill>/S
 (`~/.claude/skills` for Claude, `~/.agents/skills` for Codex). There is no version pin: like plugins, an
 entry takes its source's current tip, and an unchanged config reuses the cached layer (use
 `--no-cache-filter` on the stage to pull a newer tip). The `skills` CLI needs Node 22.20 or later. Skills
-this repo writes itself belong in `shared/skills/` instead; the two sets never share a name. Whether
-`~/.claude/skills` and `~/.agents/skills` survive `sbx create` has not been checked live: if
-`verify-sandbox-*.sh` reports the baked skills missing, add a startup step that restores them from a path
-outside `$HOME`, as `restore-claude-plugins` does for plugin settings.
+this repo writes itself belong in `shared/skills/` instead; the two sets never share a name. The baked
+`~/.claude/skills` survived `sbx create` in the live Claude check. The Codex kit deliberately does not
+restate the published kit's `agent-skills@1`: it mounts the host's shared skills store at
+`~/.agents/skills`, which would hide the baked skills.
 
-### Kit (`agent/claude/spec.yaml` + `agent/claude/files/home/`)
+### Kit (`agent/claude/jarvis-engineer.yaml` + `agent/claude/files/home/`)
 
-The kit extends the built-in `claude` sandbox, points `sandbox.image` at
-`jarvis-engineer:claude`, and appends the orchestrator persona as the system prompt
+The kit is a sandbox-kit v3 workload (`# syntax=docker/sandbox-kit:3`, `schemaVersion: "3"`,
+`kind: workload`). sbx v0.51.0 dropped the v2 grammar's `extends: claude` ("is no longer a
+built-in agent"), so the kit is no longer a delta on a built-in: its recipe is the repo
+`Dockerfile`, built `FROM` the published Claude kit, and its descriptor restates what it still
+needs from the published one (marked "from docker/sbx-kit-claude:2.1.267": the network hosts, the
+`anthropic` credential, five `~/.claude` volumes, three install and three startup hooks, and the
+`agent-context@1` guidance in `agent/claude/claude-context.md`). Re-copy those blocks from
+`/usr/share/sandbox/kit/claude/kit.yaml` in the image when the base pin moves. One deliberate
+change: the published settings hook replaces `~/.claude/settings.json`; ours merges, so the baked
+attribution and plugin keys survive. The orchestrator persona is appended by the image's `Cmd`
 (`--append-system-prompt-file /home/agent/ROLE.md`). The ten sub-agents are Claude Code
 sub-agents in `files/home/.claude/agents/`, the always-on rules are in `.claude/rules/`, and the
-skills in `.claude/skills/`.
+skills in `.claude/skills/`; the image copies `files/home/` into `/home/agent`.
+
+How sbx runs a local v3 kit shapes the layout. It builds the kit itself, from the kit directory as
+the whole build context, only with a `docker-container` buildx builder, and a recipe there cannot be
+`FROM` a locally built image. So `scripts/stage-kit.sh` assembles `build/kits/jarvis-engineer/`:
+the descriptor, the `Dockerfile` plus a final `FROM claude` as `jarvis-engineer.dockerfile`,
+`config.json`, the scripts `.dockerignore` re-includes, `agent/claude/files/home/` and the other
+files beside the descriptor. The descriptor's `agent` arg passes `AGENT` to the recipe. sbx takes
+the agent name from the staged directory's name, and caches a built kit by its source hash. Pass
+the kit as the first positional argument of `sbx create`; `--kit` is for mixins only.
+
+Registrations (ai-memory MCP and hooks, plugin restore, status line, MySQL, Postgres) are install
+hooks running as `agent`: install hooks finish before the agent first launches, and what they write
+under `/home/agent` survives stop/start. Startup keeps only what must run every boot (serve lock,
+`ai-memory init`, `ai-memory serve`, the readiness poll, the git credential helper), because the
+published kits document startup hooks as fired by a detached dispatcher. Hook rules observed on
+sbx v0.51.0 (`docs/plans/sbx-v3-kit-migration.md`, spike results): a failing startup hook stops
+every later one, so each step is wrapped to exit 0; hooks see the
+`--env-file` values and the image `ENV` whether or not they list them in `env:`, but the spec makes
+hook environments deny-by-default, so each step still declares what it reads; the hook `PATH` does
+not include `~/.local/bin`.
 
 Review on Claude Code is a fan-out, not one generalist pass. `shared/role/delegation.claude.md`
 (appended to `ROLE.md`) tells the orchestrator not to use `jarvis-reviewer`, and carries a shell
@@ -208,49 +258,49 @@ Two things about the agent files are worth knowing before editing them:
   `description`, `model`, `skills`). If you add a `skills:` entry, confirm the skill is actually
   installed by the image.
 - Five sub-agents are read-only (`jarvis-reviewer`, `jarvis-investigator`, `jarvis-planner`,
-  `jarvis-expert`, `jarvis-architect`) **by prompt only**. The spec grants one unrestricted tool
+  `jarvis-expert`, `jarvis-architect`) **by prompt only**. The kit grants one unrestricted tool
   set; nothing at the sandbox layer stops those agents from editing files. Treat "read-only" in a
   description as intent, not a guarantee. The three specialized reviewers carry
   `disallowedTools: Write, Edit, NotebookEdit, Agent`, which removes those tools but keeps `Bash`
   (they need `git diff` and tests), so they can still write through a shell.
 
 The kit also ships `files/home/.jarvis-role` (`ENGINEER`), which is the static role label the
-status line renders. It is a file rather than an `environment.variables` entry because
-`verify-kits.sh` byte-compares that block across the kits of a family, so a per-kit value there
-reads as drift.
+status line renders. It is a file rather than an image `ENV` because the `common` stage, and
+so its environment, is shared by every kit.
 `$JARVIS_ROLE` overrides it; with neither, the line falls back to `AGENT`.
 
 The network allowlist is a base block that every kit must carry (including the Go hosts
 `proxy.golang.org`, `sum.golang.org`, `vuln.go.dev`, `go.dev`, `pkg.go.dev`) plus `registry.npmjs.org` /
-`registry.yarnpkg.com` and the Docker Hub hosts (image pulls for integration tests) for dependency resolution; `agent/claude/` carries both. `verify-kits.sh` asserts
-the base is complete per kit, because the `permissions:` block sits above the shared block and is
+`registry.yarnpkg.com` and the Docker Hub hosts (image pulls for integration tests) for dependency resolution; `agent/claude/` carries both, in its `network-policy@1` `runtime.allow` list next to the published kit's hosts. `verify-kits.sh` asserts
+the base is complete per kit, because the network block sits above the shared block and is
 invisible to the drift comparison.
 
-The spec carries a block that every Claude-family kit duplicates verbatim (this is intentional,
-not an oversight — `extends` only resolves _built-in_ agents, so pointing it at a local kit for
-de-duplication resolves to an empty parent while `sbx kit validate` still reports `VALID`). The
-Codex kit carries its own variant of it, described under "Codex kit" below:
+The descriptor carries a block that every Claude-family kit duplicates (this is intentional: a v3
+`kind: set` may list only published kit images, so it cannot factor the block into a local shared
+kit). The block starts at its `# --- shared ai-memory block` marker; the environment it relies on
+is `ENV` in the `Dockerfile`'s `common` stage. The Codex kit carries its own variant of it,
+described under "Codex kit" below:
 
-- an `AI_MEMORY_DATA_DIR` volume at `/var/lib/ai-memory` (chowned to uid 1000 on install, since
-  volumes mount root:root and `/home/agent` itself is reset on every sandbox creation)
+- a `volume@1` at `/var/lib/ai-memory` for `AI_MEMORY_DATA_DIR` (chowned to uid 1000 by an install
+  hook, since volumes mount root:root)
 - a Go cache volume at `/var/lib/go` (`GOMODCACHE`, `GOCACHE`), chowned the same way, so a recreated
   sandbox keeps downloaded modules and build output
-- startup steps that clear a stale serve lock, run `ai-memory init`, register the ai-memory MCP
-  server + hooks (these must re-run per sandbox since `~/.claude*` doesn't survive from the image),
-  and background `ai-memory serve` on `127.0.0.1:49374`, polled until it answers before startup
-  continues
-- a `restore-claude-plugins` step that merges the image's plugin-settings snapshot back into
+- install hooks, after the published ones (which rewrite `~/.claude.json` and seed
+  `~/.claude/settings.json` at create), that run `ai-memory init` and register the ai-memory MCP
+  server + hooks; startup hooks that clear a stale serve lock, run `ai-memory init`, and background
+  `ai-memory serve` on `127.0.0.1:49374`, polled until it answers before startup continues
+- a `restore-claude-plugins` install hook that merges the image's plugin-settings snapshot back into
   `~/.claude/settings.json`. It runs _after_ `install-hooks` so the last writer of that file is not
   the one that could drop the keys, and it is wrapped to always exit 0
-- a `jarvis-statusline --install` step, after `restore-claude-plugins` for the same
+- a `jarvis-statusline --install` install hook, after `restore-claude-plugins` for the same
   last-writer reason, and wrapped to always exit 0
 - MySQL reached directly at `host.docker.internal:3306` — the MCP server dials it itself, and the
   base allowlist's `host.docker.internal` rule covers it. An earlier revision tunnelled this through
   the sandbox's HTTP CONNECT proxy with `socat` on `127.0.0.1:3306`; that step and its
   `localhost:3306` allowlist rule are gone.
 - conditional registration of the read-only `mysql` MCP server (`ALLOW_INSERT/UPDATE/DELETE/DDL_OPERATION=false`),
-  which no-ops with a warning (never a hard failure — a non-zero startup step silently aborts every
-  later step) if `MYSQL_USER` or the `claude` CLI isn't available
+  which no-ops with a warning (never a hard failure — a failing hook stops every later one) if
+  `MYSQL_USER` or the `claude` CLI isn't available
 - conditional registration of the `postgres` MCP server, which runs before the MySQL step so MySQL
   stays the last registration step the live verify scripts poll for. postgres-mcp has no documented
   read-only switch for its headless connection (`POSTGRES_MCP_CONNECTION_STRING`; `--access-mode ro`
@@ -263,22 +313,24 @@ Codex kit carries its own variant of it, described under "Codex kit" below:
   route for it. The tool names and Codex's `disabled_tools` support are from the docs, not yet seen
   live: `verify-sandbox-*.sh` checks the config, not that the tools are actually gone.
 
-`scripts/verify-kits.sh` finds every kit by globbing `agent/*/spec.yaml` and keys its cases on the
-spec's `extends:` (the family: `claude` or `codex`). It diffs this shared block within a family, so
+`scripts/verify-kits.sh` finds every kit by its v3 descriptor under `agent/*/` and keys its cases on
+the directory (the family: `claude` or `codex`). It diffs this shared block within a family, so
 drift between copies fails CI-style rather than silently diverging; with one kit per family that
-comparison is vacuous for now. Across families it compares only what must match: the
-`AI_MEMORY_DATA_DIR` value, the volume, the serve bind address, the readiness text, the chown step,
-and no `MYSQL_*` in `environment`.
+comparison is vacuous for now. Across families it compares only what must match: the volumes, the
+serve bind address, the readiness text and the chown steps.
 
-### Codex kit (`agent/codex/spec.yaml` + `agent/codex/files/home/`)
+### Codex kit (`agent/codex/jarvis-engineer-codex.yaml` + `agent/codex/files/home/`)
 
-`extends: codex`, `sandbox.image: jarvis-engineer:codex`. The built-in `codex` kit's
-entrypoint is already `codex --dangerously-bypass-approvals-and-sandbox` and the kit's `command` is
-appended to it, so the kit adds only `--model gpt-5.6-terra` (Codex's default model is rejected for
-ChatGPT-account logins). Do not repeat the bypass flag in `command`. The kit's network allowlist
-merges with the built-in one, which already carries the OpenAI and ChatGPT hosts. sbx writes
-`~/.codex/config.toml` at creation (model provider `sandboxd`, an MCP gateway), so every startup
-step merges into that file rather than replacing it.
+A v3 workload built the same way, `FROM` the published Codex kit, staged into
+`build/kits/jarvis-engineer-codex/`. It restates the published kit's network hosts (OpenAI and
+ChatGPT), its `openai` credential, its install hook and two startup hooks, and its legacy
+`AGENTS.md` agent-context profile (which lands beside the workspace, not in `~/.codex`). It does not
+restate `agent-skills@1` (see "Third-party skills"). The published entrypoint is already
+`codex --dangerously-bypass-approvals-and-sandbox` and the image's `Cmd` is appended to it, so the
+recipe adds only `--model gpt-5.6-terra` (Codex's default model is rejected for ChatGPT-account
+logins). Do not repeat the bypass flag in `Cmd`. The install hook writes `~/.codex/config.toml`
+at creation (`model_provider = "sandboxd"` in OAuth mode) and a startup hook appends the MCP
+gateway, so every later startup step merges into that file rather than replacing it.
 
 Generated content Codex reads: `~/.codex/AGENTS.md` (global instructions: role core, Codex
 delegation fragment, rules index), `~/.codex/agents/<name>.toml` (sub-agents),
@@ -286,9 +338,10 @@ delegation fragment, rules index), `~/.codex/agents/<name>.toml` (sub-agents),
 not `~/.codex/rules`, which Codex uses for exec policy). `files/home/.jarvis-role` is hand-owned and
 only presence-checked; Codex has no status line.
 
-Startup steps, in order: clear the serve lock, `ai-memory init`, `install-mcp --client codex`,
-`install-hooks --agent codex`, `trust-codex-hooks` (warns, exits 0), background `serve`, the
-readiness poll, and MySQL. The MySQL step appends a `[mcp_servers.mysql]` table to `config.toml`
+Install hooks, after the published one: the volume chowns, `ai-memory init`,
+`install-mcp --client codex`, `install-hooks --agent codex`, `trust-codex-hooks` (warns, exits 0),
+Postgres and MySQL. Startup hooks: clear the serve lock, `ai-memory init`, background `serve`, the
+readiness poll, and the git credential helper. The MySQL step appends a `[mcp_servers.mysql]` table to `config.toml`
 directly, because `codex mcp add` can only set values: Codex passes no environment to stdio MCP
 servers by default, and `env_vars = ["MYSQL_USER", "MYSQL_PASS"]` forwards the credentials by
 name, so no credential value is ever written into the config. `codex exec` launched from `sbx exec`
@@ -301,8 +354,9 @@ waits on stdin forever unless it gets `</dev/null`.
 `agent/codex/files/home/{.codex/AGENTS.md,.codex/agents,.agents/skills,.jarvis/rules}` from it.
 Those paths are generated and committed — never hand-edit them. Edit `shared/`, run `make sync`,
 and commit both. CI runs `sync-agents.sh --check`, which regenerates into a temp dir and fails on
-any extra, missing or changed file in the owned paths. Everything else in a kit (`spec.yaml`,
-`.jarvis-role`, `.claude/settings.json`, `.claude/workflows/`) is hand-owned and never touched.
+any extra, missing or changed file in the owned paths. Everything else in a kit (the descriptor,
+`claude-context.md`, `.jarvis-role`, `.claude/settings.json`, `.claude/workflows/`) is hand-owned
+and never touched.
 
 The repo `.gitignore` negates `/agent/codex/files/home/.agents/`: a user-global ignore of `.agents`
 would otherwise keep the generated Codex skills out of the commit and fail `--check` in CI.
@@ -354,19 +408,23 @@ the targets differ):
    same for the Codex image, plus `trust-codex-hooks` against Codex's own app-server (ai-memory's
    six hooks go from untrusted to trusted, a foreign hook stays untrusted). Both read the tool
    version pins from the one `Dockerfile`.
-2. `verify-kits.sh` — asserts the _resolved_ kit (`sbx kit inspect`), not just spec syntax, since
-   `sbx kit validate` reports `VALID` even when `extends` silently resolves to nothing. Also
-   asserts the base network allowlist, that no spec declares `MYSQL_*` in `environment.variables`
-   (v2 does no host-env interpolation there, so `MYSQL_USER: $MYSQL_USER` arrives as that literal
-   string and defeats the startup step's empty-check), the shared-block drift check, and that the
-   generated kit content matches `shared/` (`sync-agents.sh --check`).
+2. `verify-kits.sh` — stages each kit and builds it through sbx (`sbx kit validate`, then
+   `sbx kit inspect`, which reports the binary, the launch argv and the hook counts), so the built
+   kit is asserted, not just its syntax. Also asserts the base network allowlist, the pinned base
+   digests, the restated published capabilities, that each hook declares the variables it reads,
+   that no registration runs at startup (those are install hooks),
+   that no credential value is written into a descriptor or the `Dockerfile`, the shared-block
+   drift check, and that the generated kit content matches `shared/` (`sync-agents.sh --check`).
 3. `verify-sandbox-claude.sh` — live checks against a running sandbox (`sbx exec ... `), for the things
    only observable at runtime: whether the MySQL tunnel actually reaches a real MySQL server (not
    just a stub), whether plugin/MCP/`statusLine` state survives the startup steps rewriting
-   `~/.claude/settings.json`, whether nested Docker actually comes up. `verify-sandbox-codex.sh`
+   `~/.claude/settings.json`, whether nested Docker actually comes up, whether the agent process
+   carries the persona flag (read while a TTY session is attached under `script`), and whether a
+   stop/start leaves exactly one ai-memory server. `verify-sandbox-codex.sh`
    covers the Codex sandbox: generated content in place byte for byte, both MCP servers listed by
    `codex mcp list`, credentials forwarded by name only, sbx's model provider kept, and Codex
-   reporting every ai-memory hook trusted. Neither makes a model call; for Codex, confirm once by
+   reporting every ai-memory hook trusted, plus the same launch-argv and restart cases. Neither
+   makes a model call; for Codex, confirm once by
    hand (`sbx exec <name> -- sh -c 'codex exec --dangerously-bypass-approvals-and-sandbox
    --skip-git-repo-check -m gpt-5.6-terra "Quote line 2 of your global AGENTS.md, then ask
    jarvis-coder to reply OK" </dev/null'`).
@@ -394,5 +452,20 @@ the targets differ):
   ported). `trust-codex-hooks` depends on the app-server's `hooks/list` and `config/batchWrite`
   methods; a Codex release that renames them turns memory capture off (the step warns) and turns
   `verify-image-codex.sh` red.
-- `gpt-5.6-terra` in `agent/codex/spec.yaml` is what the current ChatGPT account accepts, not a
-  property of the kit; change it there if the account or Codex's model list changes.
+- `gpt-5.6-terra` in the `Dockerfile`'s `codex` stage `CMD` is what the current ChatGPT account
+  accepts, not a property of the kit; change it there if the account or Codex's model list changes.
+- The restated published capabilities are copies. Bumping a base pin in the `Dockerfile` without
+  re-copying them from the new image's `/usr/share/sandbox/kit/<agent>/kit.yaml` (and
+  `claude-context.md`) leaves the kit on the old hosts and hooks; nothing checks them against the
+  image.
+- Hook environments are not yet deny-by-default under sbx v0.51.0 (hooks saw undeclared variables),
+  so a missing `env:` entry passes every live check today. `verify-kits.sh` checks the declarations
+  statically.
+- `sbx kit add` cannot add mixins to a v3 sandbox (Docker's "Use kits" docs); change the kit and
+  recreate instead.
+- The image `verify-image-*.sh` checks is not the one a sandbox runs. `make build` builds it with
+  the local `docker` driver; sbx builds the staged kit again in `kit-builder`, with its own cache,
+  and does not hand that image to the local daemon. Inputs that float (plugins and skills at their
+  source's tip, Go tools and `@microsoft/postgres-mcp` on `latest`) can differ between the two
+  builds. `verify-sandbox-*.sh` checks the sandbox's own image only for what it asserts live.
+  Pinning those inputs closes the gap.

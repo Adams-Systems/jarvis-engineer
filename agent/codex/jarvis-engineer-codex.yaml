@@ -1,0 +1,539 @@
+# syntax=docker/sandbox-kit:3
+#
+# The jarvis-engineer Codex kit, in sandbox-kit v3. sbx v0.51.0 no longer
+# resolves the v2 `extends: codex`, so this workload is built FROM Docker's
+# published Codex kit (see the Dockerfile's base-codex). A recipe built FROM a
+# kit does not inherit its descriptor, so the codex capabilities this kit still
+# needs are restated below, marked "from docker/sbx-kit-codex:0.155.1". Re-copy
+# them from /usr/share/sandbox/kit/codex/kit.yaml when that pin moves.
+#
+# Not restated: agent-skills@1. It mounts the host's shared skills store at
+# ~/.agents/skills, which would hide the skills this image bakes there.
+#
+# This file is hand-owned. `make sandbox codex` stages it, with the Dockerfile
+# and everything that Dockerfile COPYs, into build/kits/jarvis-engineer-codex/
+# and creates the sandbox from there. The agent name is that directory's name.
+schemaVersion: "3"
+kind: workload
+displayName: Jarvis Engineer (Codex)
+description: "Senior Software Engineer responsible for orchestrating agents according to the role and responsibilities of an engineer, on Codex."
+
+args:
+    # Selects the Dockerfile's stages: `common` is built FROM base-${AGENT}, and
+    # the staged recipe ends in `FROM codex`. Not a choice: the one value is
+    # the agent this kit is.
+    agent:
+        default: codex
+        enum: [codex]
+        buildArg: AGENT
+        description: Agent stage of the jarvis-engineer Dockerfile
+
+capabilities:
+    - type: com.docker.sandbox/sbx@1
+
+    - type: com.docker.sandbox/network-policy@1
+      config:
+        runtime:
+            allow:
+                # --- from docker/sbx-kit-codex:0.155.1 ------------------------
+                - api.openai.com
+                - openai.com
+                - auth.openai.com
+                - chatgpt.com
+                - files.openai.com
+                - '*.chatgpt.com'
+                - '*.oaiusercontent.com'
+                - registry.npmjs.org
+                - releases.openai.com
+                - api.github.com
+                - github.com
+                - codeload.github.com
+                - archive.ubuntu.com
+                - security.ubuntu.com
+                - ports.ubuntu.com
+                - download.docker.com
+                # --- base: identical in every kit ----------------------------
+                # github.com, api.github.com and registry.npmjs.org are in the
+                # published list above.
+                - host.docker.internal
+                - gateway.docker.internal
+                - raw.githubusercontent.com
+                - objects.githubusercontent.com
+                - proxy.golang.org
+                - sum.golang.org
+                - vuln.go.dev
+                - go.dev
+                - pkg.go.dev
+                - registry.yarnpkg.com
+                - registry-1.docker.io
+                - auth.docker.io
+                - production.cloudflare.docker.com
+
+    # --- from docker/sbx-kit-codex:0.155.1 ------------------------------------
+    - type: com.docker.sandbox/credential@1
+      # MIGRATION NOTE: v2 credentials default to not-required and the v3
+      # default inverts (an entry is required unless it opts out), so
+      # `optional: true` is what preserves v2's behavior. It is also correct on
+      # its own terms: Codex runs with nothing bound — it prompts for login —
+      # and an OAuth record is never a literal value the CLI could ship, so
+      # `required` would fail exactly the healthy OAuth setup.
+      optional: true
+      description: OpenAI API access (API key or ChatGPT OAuth)
+      config:
+        service: openai
+        phase: runtime
+        apiKey:
+            name: OPENAI_API_KEY
+            # NOTE: deliberately NOT `proxyManaged: true`, unlike most apiKey-based
+            # kits in this repo. Codex does not read this variable for model calls
+            # on the paths this kit configures — the install hook writes the literal
+            # `proxy-managed` sentinel into ~/.codex/auth.json instead, and the
+            # proxy swaps it on the domains below. Flipping this on would put a
+            # sentinel in the env var too, which is arguably tidier, but it has NOT
+            # been verified that Codex's own key-discovery order stays happy with
+            # a sentinel in both places.
+            inject:
+                - {domain: api.openai.com, header: Authorization, format: "Bearer %s"}
+                # TODO(codex-extraction): drop this entry once someone can rule out
+                # the last request path. The apex serves OpenAI's website, not the
+                # API: everything observed from a live 0.151.0 CLI goes to
+                # api.openai.com, chatgpt.com, auth.openai.com or files.openai.com.
+                # While it stands, any process in the sandbox that fetches
+                # openai.com gets the user's real key attached by the proxy, which
+                # is avoidable exposure. Carried over unchanged rather than narrowed
+                # unilaterally, because a missing header is a silent 401 on whatever
+                # path did need it and "no path needs it" is a negative this
+                # migration cannot prove.
+                - {domain: openai.com, header: Authorization, format: "Bearer %s"}
+        # For a host whose stored openai credential is a ChatGPT login rather
+        # than an API key. The block is entirely declarative: the token
+        # endpoint, the hosts the bearer is actually spent on, and the sentinel
+        # values the proxy substitutes at request time. Nothing in the container
+        # implements any of it.
+        #
+        # MIGRATION NOTE: v2's `oauth.skipIfEnv: [OPENAI_API_KEY]` is dropped.
+        # It was already documented there as a no-op for a schemaVersion "2"
+        # credential — resolution is binding-driven, not host-env-driven — and
+        # v3 has no such field at all: the mode decision belongs to the host's
+        # binding, surfaced to the install hook below as SBX_CRED_OPENAI_MODE.
+        oauth:
+            tokenEndpoint: {host: auth.openai.com, path: /oauth/token}
+            # In oauth mode the install hook points Codex at a ChatGPT-backed
+            # model provider, so the sentinel bearer travels on inference calls to
+            # chatgpt.com — not only on the token exchange. resourceHosts is what
+            # tells the proxy to substitute the real token there too.
+            resourceHosts:
+                - chatgpt.com
+            sentinels:
+                accessToken: oai-oat01-proxy-managed
+                refreshToken: oai-ort01-proxy-managed
+    # v2's setup.install / setup.startup, verbatim, in the single lifecycle
+    # entry v3 collects them into.
+
+    # --- shared ai-memory block -----------------------------------------------
+    # Duplicated in the Claude and Codex kits: a v3 set may list only published
+    # kit images, so it cannot be factored into a local shared kit.
+    # scripts/verify-kits.sh asserts the copies stay in agreement. The
+    # environment it relies on (AI_MEMORY_DATA_DIR, GOMODCACHE, GOCACHE) is ENV
+    # in the Dockerfile's common stage.
+    - type: com.docker.sandbox/volume@1
+      description: ai-memory store
+      config: {path: /var/lib/ai-memory, size: 5g, mode: "0755"}
+    - type: com.docker.sandbox/volume@1
+      description: Go module and build caches
+      config: {path: /var/lib/go, size: 10g, mode: "0755"}
+
+    # One lifecycle@1 per kit (it is a singleton): the codex hooks first, as
+    # the published kit runs them, then this kit's.
+    - type: com.docker.sandbox/lifecycle@1
+      config:
+        install:
+            # --- from docker/sbx-kit-codex:0.155.1 ----------------------------
+            # Seed ~/.codex/config.toml + ~/.codex/auth.json, branching on the auth
+            # mode the engine surfaces as SBX_CRED_OPENAI_MODE. Only three values
+            # reach a kit — oauth, apikey, none (a host with both collapses to
+            # oauth) — and the branches are:
+            #
+            #   oauth  -> config.toml WITH forced API-key login AND the ChatGPT-backed
+            #             model_provider block; auth.json holds the proxy-managed
+            #             placeholder.
+            #   apikey -> config.toml WITH forced API-key login, WITHOUT the provider
+            #             block; auth.json holds the proxy-managed placeholder.
+            #   none   -> config.toml WITHOUT either; auth.json REMOVED, so Codex
+            #             prompts for login on first use. Leaving a stale placeholder
+            #             behind would send the literal string to OpenAI and 401.
+            #
+            # Both files are kit-managed and rewritten unconditionally on every
+            # (re)create, so a mode change on recreate is picked up. The content is a
+            # pure function of the mode, which is what makes the unconditional rewrite
+            # idempotent — install hooks run again on every recreate.
+            #
+            # The MCP block is deliberately NOT written here. The runtime-gated
+            # registration in startup below is the single writer of it, and its grep
+            # guard supplies its own idempotency.
+            #
+            # Heredoc bodies sit at the outer indentation on purpose, including inside
+            # the case arms: an unquoted terminator has to start at column 0.
+            - command: |
+                set -e
+                # ~/.codex is CODEX_HOME; ~/.agents is where Codex looks for the
+                # cross-agent skills tree (~/.agents/skills). Both are created up
+                # front so nothing later has to create them as root.
+                mkdir -p /home/agent/.codex /home/agent/.agents
+                MODE="${SBX_CRED_OPENAI_MODE:-none}"
+                cat > /home/agent/.codex/config.toml << 'EOF'
+                # Codex configuration for a Docker sandbox.
+                # The container is the sandbox, so Codex's own approval gate and
+                # filesystem sandbox are turned off: there is nobody to answer a
+                # prompt, and the isolation is already provided from the outside.
+
+                approval_policy = "never"
+                sandbox_mode = "danger-full-access"
+                mcp_oauth_credentials_store = "file"
+                EOF
+                # In a managed mode the placeholder in auth.json is the whole auth
+                # story, so a remote client must not be able to replace it with a
+                # sandbox-local ChatGPT login. `none` mode deliberately permits that
+                # login — it is the only way to authenticate at all there.
+                case "$MODE" in
+                  oauth|apikey)
+                    cat >> /home/agent/.codex/config.toml << 'EOF'
+                forced_login_method = "api"
+                EOF
+                    ;;
+                esac
+                if [ "$MODE" = oauth ]; then
+                  cat >> /home/agent/.codex/config.toml << 'EOF'
+
+                model_provider = "sandboxd"
+
+                [model_providers.sandboxd]
+                name = "Sandbox Proxy"
+                base_url = "https://chatgpt.com/backend-api/codex"
+                experimental_bearer_token = "oai-oat01-proxy-managed"
+                requires_openai_auth = false
+                EOF
+                fi
+                case "$MODE" in
+                  oauth|apikey)
+                    cat > /home/agent/.codex/auth.json << 'EOF'
+                {
+                  "OPENAI_API_KEY": "proxy-managed"
+                }
+                EOF
+                    ;;
+                  *)
+                    rm -f /home/agent/.codex/auth.json
+                    ;;
+                esac
+              user: "agent"
+              # v3 hook environments are deny-by-default: a hook sees only the
+              # platform baseline plus what it names here. SBX_CRED_OPENAI_MODE is
+              # the one variable this script reads, and without this line every
+              # create would silently take the `none` branch.
+              env: [SBX_CRED_OPENAI_MODE]
+              description: Seed Codex config/auth from SBX_CRED_OPENAI_MODE
+            # --- jarvis-engineer ----------------------------------------------
+            # Volumes are mounted before install runs, and install runs as root, so this
+            # is the only place the volume's root:root ownership can be handed over.
+            - command: "chown 1000:1000 /var/lib/ai-memory"
+              user: "0"
+              description: Give the agent user ownership of the memory volume
+
+            - command: "chown 1000:1000 /var/lib/go"
+              user: "0"
+              description: Give the agent user ownership of the Go cache volume
+            # Registrations run here, once at create, rather than at startup:
+            # install hooks finish before the agent first launches, while the
+            # published kits document startup hooks as fired by a detached
+            # dispatcher that can overlap a live session. What they write lives
+            # under /home/agent and survives stop/start. Run as the agent so
+            # they write its config; install hooks default to root.
+            - command: ["ai-memory", "init"]
+              env: [AI_MEMORY_DATA_DIR, AI_MEMORY_AUTH_TOKEN]
+              user: agent
+              description: Create the data directory layout before the registrations below
+
+            # sbx writes ~/.codex/config.toml at sandbox creation (model provider, MCP
+            # gateway), so MCP and hook registration cannot be baked into the image and
+            # must re-run here. Both merge into the existing files and are idempotent.
+            - command: ["ai-memory", "install-mcp", "--client", "codex", "--apply"]
+              env: [AI_MEMORY_DATA_DIR, AI_MEMORY_AUTH_TOKEN]
+              user: agent
+              description: Register the ai-memory MCP server with Codex
+
+            - command: ["ai-memory", "install-hooks", "--agent", "codex", "--apply"]
+              env: [AI_MEMORY_DATA_DIR, AI_MEMORY_AUTH_TOKEN]
+              user: agent
+              description: Register ai-memory lifecycle hooks with Codex
+
+            # Codex runs a hook only once its exact definition is trusted, and the trust
+            # lives in the config.toml the codex install hook above rewrites at create.
+            # This trusts ai-memory's hooks and nothing else, using the hashes the
+            # installed Codex computes. Wrapped so a failure only warns: a failing hook
+            # stops every later one, and the agent still works without memory capture.
+            - command:
+                [
+                  "sh",
+                  "-c",
+                  "trust-codex-hooks || echo 'hooks: could not trust the ai-memory hooks; memory capture is off' >&2; exit 0",
+                ]
+              user: agent
+              description: Trust the ai-memory hooks for Codex
+
+            # --- postgres --------------------------------------------------------
+            # Microsoft's postgres-mcp. Headless it reads one connection string from
+            # POSTGRES_MCP_CONNECTION_STRING (no OS keyring in the sandbox). The string
+            # carries the password, so `env_vars` forwards it by name and no value is
+            # written into ~/.codex/config.toml. Put host.docker.internal in the string;
+            # 127.0.0.1 would be the sandbox itself. Supply it at creation time
+            # (sbx create --env-file .env ...), using a read-only database role.
+            #
+            # The env-var connection has no documented read-only switch, so the write
+            # tools are switched off with `disabled_tools`. --no-telemetry: the sandbox
+            # has no route for it. Runs before the mysql step so that stays the last
+            # registration step verify-sandbox-codex.sh polls for.
+            - command:
+                - "sh"
+                - "-c"
+                - |
+                  CONFIG=/home/agent/.codex/config.toml
+
+                  if [ -z "$POSTGRES_MCP_CONNECTION_STRING" ]; then
+                    echo "postgres: POSTGRES_MCP_CONNECTION_STRING unset, skipping registration (pass --env-file)" >&2
+                    exit 0
+                  fi
+                  # Startup steps re-run on every start; the table must appear once.
+                  if grep -q '^\[mcp_servers\.postgres\]' "$CONFIG" 2>/dev/null; then
+                    exit 0
+                  fi
+
+                  mkdir -p /home/agent/.codex
+                  cat >>"$CONFIG" <<'TOML' || echo "postgres: MCP registration failed" >&2
+
+                  [mcp_servers.postgres]
+                  command = "npx"
+                  args = ["-y", "@microsoft/postgres-mcp", "run", "--no-telemetry"]
+                  env_vars = ["POSTGRES_MCP_CONNECTION_STRING"]
+                  disabled_tools = ["postgres_mcp_modify", "postgres_mcp_bulk_load_csv", "postgres_mcp_add_connection"]
+                  TOML
+
+                  # A non-zero exit from any startup step silently aborts every later
+                  # step, so this must always succeed.
+                  exit 0
+              env: [POSTGRES_MCP_CONNECTION_STRING]
+              user: agent
+              description: Register the Postgres MCP server with Codex and disable its write tools
+
+            # --- mysql -----------------------------------------------------------
+            # The MCP server dials host.docker.internal:3306 directly -- the allowlist
+            # above names that host. Codex passes no environment to stdio MCP servers
+            # unless told to: `env_vars` forwards the credentials by name from the
+            # sandbox environment, so no credential value is ever written into
+            # ~/.codex/config.toml. Supply them at creation time:
+            #   make sandbox codex   (sbx create --env-file .env ./build/kits/jarvis-engineer-codex .)
+            # Written as TOML directly because `codex mcp add` can only set values.
+            - command:
+                - "sh"
+                - "-c"
+                - |
+                  CONFIG=/home/agent/.codex/config.toml
+
+                  if [ -z "$MYSQL_USER" ]; then
+                    echo "mysql: MYSQL_USER unset, skipping registration (pass --env-file)" >&2
+                    exit 0
+                  fi
+                  # Startup steps re-run on every start; the table must appear once.
+                  if grep -q '^\[mcp_servers\.mysql\]' "$CONFIG" 2>/dev/null; then
+                    exit 0
+                  fi
+
+                  mkdir -p /home/agent/.codex
+                  cat >>"$CONFIG" <<'TOML' || echo "mysql: MCP registration failed" >&2
+
+                  [mcp_servers.mysql]
+                  command = "npx"
+                  args = ["-y", "@benborla29/mcp-server-mysql"]
+                  env_vars = ["MYSQL_USER", "MYSQL_PASS"]
+
+                  [mcp_servers.mysql.env]
+                  MYSQL_HOST = "host.docker.internal"
+                  MYSQL_PORT = "3306"
+                  ALLOW_INSERT_OPERATION = "false"
+                  ALLOW_UPDATE_OPERATION = "false"
+                  ALLOW_DELETE_OPERATION = "false"
+                  ALLOW_DDL_OPERATION = "false"
+                  TOML
+
+                  # A non-zero exit from any startup step silently aborts every later
+                  # step, so this must always succeed.
+                  exit 0
+              env: [MYSQL_USER]
+              user: agent
+              description: Register the read-only MySQL MCP server with Codex
+
+        startup:
+            # --- from docker/sbx-kit-codex:0.155.1 ----------------------------
+            # CODEX_HOME (~/.codex) is created agent-owned by the dockerfile and
+            # re-ensured by the install hook above, which runs pre-launch as the agent
+            # user — so no root-owned mkdir/chown step is needed here.
+            #
+            # MIGRATION NOTE: v2 backgrounded this by ending the shell command in
+            # `&`. v3 states it as `background: true`, so the engine detaches the
+            # hook rather than the shell forking out from under it.
+            - command: ["sh", "-c", "command -v apt-get > /dev/null 2>&1 && (apt-get update -qq -y > /dev/null 2>&1 || true)"]
+              user: "root"
+              background: true
+              description: Update apt package cache in background
+            # Gateway-first MCP registration. The runtime injects MCP_GATEWAY_URL and
+            # MCP_SENTINEL_TOKEN_NAME into the container env when a gateway has been
+            # reserved. The sentinel name is not a credential — the proxy substitutes
+            # the real token at request time, keyed by that name. No-op when MCP is
+            # not enabled, which is what the guard is for.
+            #
+            # config.toml is shared territory: the install hook writes the yolo-mode
+            # and provider keys pre-launch, and Codex itself appends per-project and
+            # TUI state during a session. Append a new table rather than rewriting the
+            # file so none of that is clobbered, and grep first so re-running on every
+            # container start (which startup hooks do) stays a no-op.
+            #
+            # The header table is `http_headers`, NOT `headers`. This is the one place
+            # this kit diverges from the built-in spec for correctness rather than
+            # policy: Codex spells the key `http_headers`, ignores unknown keys without
+            # complaint, and so accepts a `headers` table while sending no
+            # Authorization at all. That fails open — the gateway registers, looks
+            # healthy in `codex mcp get`, and every tool call through it is
+            # unauthenticated. Confirmed against 0.151.0: with `headers`,
+            # `codex mcp get mcp-gateway` reports `http_headers: -`; with
+            # `http_headers` it reports the header. The `headers` spelling is correct
+            # for the JSON-configured agents (copilot, kiro) and does not transliterate
+            # to Codex's TOML.
+            - command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  [ -n "$MCP_GATEWAY_URL" ] || exit 0
+                  mkdir -p "$HOME/.codex"
+                  cfg="$HOME/.codex/config.toml"
+                  touch "$cfg"
+                  grep -q "^\[mcp_servers.mcp-gateway\]" "$cfg" && exit 0
+                  cat >> "$cfg" <<EOF
+
+                  [mcp_servers.mcp-gateway]
+                  type = "http"
+                  url = "$MCP_GATEWAY_URL"
+                  [mcp_servers.mcp-gateway.http_headers]
+                  Authorization = "Bearer $MCP_SENTINEL_TOKEN_NAME"
+                  EOF
+              user: "agent"
+              # $HOME is platform baseline; these two are not, and a hook that
+              # cannot see MCP_GATEWAY_URL takes its no-op branch on every boot.
+              env: [MCP_GATEWAY_URL, MCP_SENTINEL_TOKEN_NAME]
+              description: Register the sandbox MCP gateway in ~/.codex/config.toml
+    # No agent-sessions@1, deliberately. The capability states the argv a harness
+    # uses to drive the agent headlessly, and the only evidence this kit has of a
+    # working non-interactive invocation was its TCK's `promptArgs` — which it
+    # deliberately omitted: Codex does have `codex exec <prompt>`, but every auth
+    # path this kit configures needs a real OpenAI credential, none is wired up on
+    # the runner, and the built-in agent's own e2e never exercised the path either,
+    # so there is no known-working recipe to carry over. Declaring
+    # `prompt: ["exec", "{{.Prompt}}"]` here would be inventing flags rather than
+    # migrating them. Add it when someone verifies the invocation against a live
+    # credential.
+
+    # Where Codex reads the cross-agent skills tree, so the host's shared store
+    # reaches it. Not a new claim: the install hook above already creates
+    # ~/.agents for exactly this, and v3 is the first grammar with a field to
+    # say so. Optional, so a host with no store (or the setting off) composes
+    # the kit rather than refusing it.
+            # --- jarvis-engineer ----------------------------------------------
+            # The store now outlives the container, so a serve lock can survive an
+            # unclean stop. Every start is a fresh PID namespace, so any lock still on
+            # the volume at this point is by definition stale.
+            - command:
+                [
+                  "sh",
+                  "-c",
+                  "rm -f /var/lib/ai-memory/.serve.lock /var/lib/ai-memory/.serve.lock.holder",
+                ]
+              description: Clear a serve lock left behind by an unclean shutdown
+
+            - command: ["ai-memory", "init"]
+              env: [AI_MEMORY_DATA_DIR, AI_MEMORY_AUTH_TOKEN]
+              description: Ensure the data directory layout exists
+
+            # Must be backgrounded: startup steps run sequentially to completion, so a
+            # foreground server would block sandbox startup forever.
+            - command:
+                [
+                  "ai-memory",
+                  "serve",
+                  "--transport",
+                  "http",
+                  "--bind",
+                  "127.0.0.1:49374",
+                ]
+              background: true
+              env: [AI_MEMORY_DATA_DIR, AI_MEMORY_AUTH_TOKEN]
+              description: Run the ai-memory MCP server on loopback
+
+            # `background: true` means the agent could launch while the server is
+            # still binding. `sbx create` returns only after the startup steps ran, so
+            # on create this poll gates the agent on readiness; on a later start, sbx
+            # may attach while steps still run (unverified), and the agent's MCP client
+            # retries. A persistent store may have a bearer token file; use it when
+            # present. Bounded and always exits 0: a server that never comes up must
+            # degrade to "memory unavailable", not "sandbox will not start".
+            - command:
+                - "sh"
+                - "-c"
+                - |
+                  request() {
+                    auth_token="$AI_MEMORY_AUTH_TOKEN"
+                    if [ -z "$auth_token" ] && [ -s "$AI_MEMORY_DATA_DIR/auth-tokens/default" ]; then
+                      auth_token=$(cat "$AI_MEMORY_DATA_DIR/auth-tokens/default")
+                    fi
+                    if [ -n "$auth_token" ]; then
+                      curl -fsS -o /dev/null -X POST -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -H "Authorization: Bearer $auth_token" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"startup","version":"0"}}}' http://127.0.0.1:49374/mcp
+                    else
+                      curl -fsS -o /dev/null -X POST -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"startup","version":"0"}}}' http://127.0.0.1:49374/mcp
+                    fi
+                  }
+                  for i in $(seq 1 30); do
+                    request && exit 0
+                    sleep 1
+                  done
+                  echo 'ai-memory: server not ready after 30s; continuing without memory' >&2
+                  exit 0
+              env: [AI_MEMORY_DATA_DIR, AI_MEMORY_AUTH_TOKEN]
+              description: Wait for the ai-memory server to accept MCP requests
+
+            # --- private Go modules ------------------------------------------------
+            # Only when the sandbox was created with GOPRIVATE and GOPRIVATE_GIT_TOKEN
+            # (sbx create --env-file .env). The helper reads the token from the
+            # environment each time git asks, so no token value is ever written into
+            # ~/.gitconfig. Always exits 0: a non-zero startup step silently aborts
+            # every later step.
+            - command:
+                - "sh"
+                - "-c"
+                - |
+                  if [ -n "$GOPRIVATE" ] && [ -n "$GOPRIVATE_GIT_TOKEN" ]; then
+                    git config --global credential.https://github.com.helper \
+                      '!f() { echo username=x-access-token; echo "password=$GOPRIVATE_GIT_TOKEN"; }; f' \
+                      || echo "go: could not register the git credential helper" >&2
+                  fi
+                  exit 0
+              env: [GOPRIVATE, GOPRIVATE_GIT_TOKEN]
+              description: Let git read private Go modules with a token from the environment
+
+    # --- from docker/sbx-kit-codex:0.155.1 ------------------------------------
+    # MIGRATION NOTE: v2's agentInstructions declared `filename: AGENTS.md` and
+    # no `content`, so there is no body to stage and no <kit>-context.md file.
+    # The declaration still carries its whole v2 meaning: this workload owns the
+    # AGENTS.md profile, and the runtime seeds it with its own guidance plus the
+    # per-kit index any composed mixin contributes to.
+    - type: com.docker.sandbox/agent-context@1
+      config:
+        filename: AGENTS.md

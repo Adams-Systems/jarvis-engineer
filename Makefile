@@ -21,16 +21,22 @@ $(error usage: make $(firstword $(filter $(AGENT_VERBS),$(MAKECMDGOALS))) claude
 endif
 endif
 
-# Per-agent facts: the kit directory and the default sandbox name.
-KIT_claude     := agent/claude
-KIT_codex      := agent/codex
-SANDBOX_claude := jarvis-engineer
-SANDBOX_codex  := jarvis-engineer-codex
+# Per-agent facts: the kit name (the stem of agent/<agent>/<name>.yaml, which
+# sbx also takes as the agent name) and the default sandbox name.
+KIT_NAME_claude := jarvis-engineer
+KIT_NAME_codex  := jarvis-engineer-codex
+SANDBOX_claude  := jarvis-engineer
+SANDBOX_codex   := jarvis-engineer-codex
 
 IMAGE   := jarvis-engineer:$(AGENT)
-TARBALL := $(CURDIR)/jarvis-engineer-$(AGENT).tar
-KIT     ?= $(KIT_$(AGENT))
 SANDBOX ?= $(SANDBOX_$(AGENT))
+
+# sbx builds a local v3 kit from its own directory, which must hold the whole
+# build context, and only with a docker-container builder (the docker driver
+# cannot export the OCI layout it needs). scripts/stage-kit.sh assembles that
+# directory; KIT_BUILDER is the builder sbx is pointed at.
+KIT_DIR     := ./build/kits/$(KIT_NAME_$(AGENT))
+KIT_BUILDER := kit-builder
 
 .PHONY: help claude codex build template verify-image sandbox verify-sandbox sync verify verify-sync verify-make verify-kits clean
 
@@ -45,23 +51,25 @@ claude codex:
 build:
 	docker build --target $(AGENT) --build-arg AGENT=$(AGENT) -t $(IMAGE) .
 
-## template <agent>: load the built image into sbx as a reusable template
+## template <agent>: build and verify the image, then build the staged kit into sbx's cache
+#
+# sbx caches a built kit by its source hash, so a later `make sandbox` with the
+# same sources creates without rebuilding.
 template: build verify-image
-	docker image save $(IMAGE) -o $(TARBALL)
-	sbx template load $(TARBALL)
-	rm -f $(TARBALL)
+	./scripts/stage-kit.sh $(AGENT)
+	docker buildx inspect $(KIT_BUILDER) >/dev/null 2>&1 || docker buildx create --name $(KIT_BUILDER) --driver docker-container --bootstrap
+	BUILDX_BUILDER=$(KIT_BUILDER) sbx kit inspect $(KIT_DIR)
 
-## sandbox <agent>: (re)create SANDBOX from the agent's kit with credentials from .env
+## sandbox <agent>: (re)create SANDBOX from the agent's staged kit with credentials from .env
 #
 # --env-file is required: MYSQL_USER/MYSQL_PASS are read from the sandbox
 # environment by the MySQL MCP server, and are never written into any config.
-# A kind:sandbox kit registers under its spec `name:`, not its directory name,
-# and that is the agent argument `sbx create` expects.
-KIT_SPEC_NAME = $(shell awk '/^name:/ {print $$2; exit}' $(KIT)/spec.yaml)
-
+# The kit is the first positional argument; --kit is for mixins only.
 sandbox:
 	-sbx rm --force $(SANDBOX)
-	sbx create --name $(SANDBOX) --env-file .env --kit $(KIT) $(KIT_SPEC_NAME) .
+	./scripts/stage-kit.sh $(AGENT)
+	docker buildx inspect $(KIT_BUILDER) >/dev/null 2>&1 || docker buildx create --name $(KIT_BUILDER) --driver docker-container --bootstrap
+	BUILDX_BUILDER=$(KIT_BUILDER) sbx create --name $(SANDBOX) --env-file .env $(KIT_DIR) .
 	./scripts/verify-sandbox-$(AGENT).sh $(SANDBOX)
 
 ## sync: regenerate the kit content of agent/claude/ and agent/codex/ from shared/
@@ -85,7 +93,7 @@ verify-make:
 verify-image:
 	./scripts/verify-image-$(AGENT).sh $(IMAGE)
 
-## verify-kits: static acceptance checks against every agent/*/spec.yaml
+## verify-kits: static acceptance checks against every agent kit
 verify-kits:
 	./scripts/verify-kits.sh
 
@@ -93,6 +101,6 @@ verify-kits:
 verify-sandbox:
 	./scripts/verify-sandbox-$(AGENT).sh $(SANDBOX)
 
-## clean: remove the build tarballs
+## clean: remove the staged kits
 clean:
-	rm -f $(foreach agent,$(AGENTS),$(CURDIR)/jarvis-engineer-$(agent).tar)
+	rm -rf build/kits
