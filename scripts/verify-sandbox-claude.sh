@@ -46,6 +46,39 @@ check() {
 	fi
 }
 
+# session_args -- the argv of the agent process, read while a TTY session is
+# attached. The agent only runs inside a session, so one is attached for a few
+# seconds under `script` (util-linux and BSD spell its arguments differently).
+session_args() {
+	local pid args='' i
+
+	if script --version >/dev/null 2>&1; then
+		script -qec "sbx run --name $SANDBOX" /dev/null >/dev/null 2>&1 &
+	else
+		script -q /dev/null sbx run --name "$SANDBOX" >/dev/null 2>&1 &
+	fi
+	pid=$!
+	for i in $(seq 1 30); do
+		args="$(sbx exec "$SANDBOX" -- sh -c 'ps -eo args | grep "^claude " | head -n 1' 2>/dev/null)"
+		[[ -n "$args" ]] && break
+		sleep 1
+	done
+	kill "$pid" 2>/dev/null
+	wait "$pid" 2>/dev/null
+	printf '%s' "${args:-<no agent process>}"
+}
+
+# expect <name> <expected-substring> <actual> -- for values read on the host.
+expect() {
+	if [[ "$3" == *"$2"* ]]; then
+		printf 'ok   %s\n' "$1"
+		pass=$((pass + 1))
+	else
+		printf 'FAIL %s\n     want substring: %s\n     got: %s\n' "$1" "$2" "${3:-<empty>}"
+		fail=$((fail + 1))
+	fi
+}
+
 printf '== live sandbox acceptance: %s ==\n' "$SANDBOX"
 
 # Startup steps complete asynchronously after `sbx create` returns, so poll for
@@ -199,9 +232,21 @@ check 'baked skills survive sandbox creation' \
 	"$(jq -r '.skills[] | split("@")[0]' "$CONFIG" | sort | paste -sd ' ' -)" \
 	'cd /home/agent/.claude/skills && for n in $(node -e "for (const e of require(\"/usr/local/share/jarvis-engineer/config.json\").skills || []) console.log(e.split(\"@\")[0])"); do test -s "$n/SKILL.md" && echo "$n"; done | sort | paste -sd " " -'
 
+# --- persona ------------------------------------------------------------
+# The image bakes the kit content into /home/agent and appends the persona in
+# its Cmd. Both fail silently: a sandbox without them is stock Claude, and
+# every other case here still passes.
+check 'ROLE.md reached the sandbox byte for byte' \
+	"$(cksum <"$KIT_HOME/ROLE.md")" \
+	'cksum </home/agent/ROLE.md'
+
+expect 'agent launches with the role prompt appended' \
+	'--append-system-prompt-file /home/agent/ROLE.md' \
+	"$(session_args)"
+
 # --- sub-agents ---------------------------------------------------------
-# sbx copies files/home into the sandbox; a stale or partial copy would leave
-# the review fan-out in ROLE.md pointing at reviewers that are not there.
+# The image bakes files/home into /home/agent; a stale or partial copy would
+# leave the review fan-out in ROLE.md pointing at reviewers that are not there.
 check 'every sub-agent file is in place' \
 	"$(cd "$KIT_HOME/.claude/agents" && ls | sort | paste -sd ' ' -)" \
 	'cd /home/agent/.claude/agents && ls | sort | paste -sd " " -'
@@ -209,6 +254,23 @@ check 'every sub-agent file is in place' \
 check 'specialized reviewers carry their disallowedTools line' \
 	'restricted=3' \
 	'cd /home/agent/.claude/agents && echo "restricted=$(grep -l "^disallowedTools: " security-reviewer.md code-reviewer.md database-reviewer.md 2>/dev/null | wc -l | tr -d " ")"'
+
+# --- restart ------------------------------------------------------------
+# Startup steps re-run on every start against volumes that kept their state:
+# a stale serve lock or a second server would surface only after a restart.
+# `sbx exec` starts a stopped sandbox and returns once its startup steps ran.
+sbx stop "$SANDBOX" >/dev/null 2>&1
+check 'after a restart, exactly one ai-memory server runs' \
+	'servers=1' \
+	'for i in $(seq 1 30); do
+		curl -s -o /dev/null --max-time 2 http://127.0.0.1:49374/mcp && break
+		sleep 1
+	done
+	echo "servers=$(ps -eo args | grep -c "^ai-memory serve")"'
+
+check 'after a restart, the memory store and plugins are intact' \
+	"store=/var/lib/ai-memory enabled=$PLUGIN_COUNT" \
+	'echo "store=$AI_MEMORY_DATA_DIR enabled=$(claude plugin list --json | grep -c "\"enabled\": true")"'
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

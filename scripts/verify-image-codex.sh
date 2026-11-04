@@ -59,7 +59,41 @@ check_label() {
 	report "$1" "$2" "$(docker image inspect "$IMAGE" --format "{{index .Config.Labels \"$3\"}}" 2>&1)"
 }
 
+# check_config <name> <expected-substring> <go-template>
+#
+# sbx launches the agent from the image's Entrypoint + Cmd, so the launch argv
+# is image metadata too.
+check_config() {
+	report "$1" "$2" "$(docker image inspect "$IMAGE" --format "$3" 2>&1)"
+}
+
 printf '== image acceptance: %s ==\n' "$IMAGE"
+
+# --- kit content and launch ---------------------------------------------
+# A v3 kit has no files/home injection: the image carries the generated
+# AGENTS.md, sub-agents, skills and rules under /home/agent, and sbx keeps the
+# image's home on create. Compared byte for byte with the kit tree. Kit paths
+# carry no spaces (the generator only emits [a-z0-9-] names).
+KIT_HOME=agent/codex/files/home
+kit_files="$(cd "$KIT_HOME" && find . -type f ! -name .DS_Store | sort | tr '\n' ' ')"
+manifest='for f in '"$kit_files"'; do printf "%s %s\n" "$(cksum <"$f")" "$f"; done'
+report 'kit content is baked into the agent home byte for byte' \
+	"$(cd "$KIT_HOME" && sh -c "$manifest")" \
+	"$(docker run --rm --user 1000:1000 --entrypoint sh "$IMAGE" -c "cd /home/agent && $manifest" 2>&1)"
+
+# The published codex kit's entrypoint already bypasses approvals and the
+# sandbox; the kit only adds the model the account accepts.
+check_config 'agent launches with approvals and sandbox bypassed' \
+	'[codex --dangerously-bypass-approvals-and-sandbox]' \
+	'{{.Config.Entrypoint}}'
+
+check_config 'agent launch pins the model the account accepts' \
+	'[--model gpt-5.6-terra]' \
+	'{{.Config.Cmd}}'
+
+check 'image is built on the published codex kit' \
+	'READ_OK' \
+	'test -r /usr/share/sandbox/kit/codex/kit.yaml && echo READ_OK'
 
 # --- ai-memory ----------------------------------------------------------
 check 'ai-memory resolves on the agent PATH' \
@@ -252,9 +286,12 @@ check 'node is new enough for postgres-mcp' \
 	'NODE_OK' \
 	'node -e "process.exit(+process.versions.node.split(\".\")[0] >= 22 ? 0 : 1)" && echo NODE_OK'
 
-check 'codex resolves at the absolute path startup steps use' \
-	"$NPM_PREFIX/bin/codex" \
-	'command -v codex'
+# Startup steps and trust-codex-hooks call codex by this absolute path, while
+# the agent runs whatever PATH finds first (~/.local/bin on the published codex
+# kit). Hook trust is per exact handler, so both must be the same binary.
+check 'the absolute codex path startup steps use is the agent PATH codex' \
+	'SAME' \
+	"[ \"\$(readlink -f $NPM_PREFIX/bin/codex)\" = \"\$(readlink -f \"\$(command -v codex)\")\" ] && echo SAME"
 
 check 'codex executes as uid 1000' \
 	'codex-cli ' \

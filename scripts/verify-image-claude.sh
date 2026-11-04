@@ -75,6 +75,25 @@ check_label() {
 	fi
 }
 
+# check_config <name> <expected-substring> <go-template>
+#
+# Like check_label, for the rest of the image config: sbx launches the agent
+# from the image's Entrypoint + Cmd, so the launch argv is image metadata too.
+check_config() {
+	local name="$1" expected="$2" actual
+
+	actual="$(docker image inspect "$IMAGE" --format "$3" 2>&1)"
+
+	if [[ "$actual" == *"$expected"* ]]; then
+		printf 'ok   %s\n' "$name"
+		pass=$((pass + 1))
+	else
+		printf 'FAIL %s\n     want substring: %s\n     got: %s\n' \
+			"$name" "$expected" "${actual:-<empty>}"
+		fail=$((fail + 1))
+	fi
+}
+
 # arg_of <Dockerfile> <ARG name> -- the default value of that build ARG.
 arg_of() {
 	sed -n "s/^ARG $2=//p" "$1" | head -n 1
@@ -152,6 +171,39 @@ done < <(jq -r '.mcpServers[] | if (ltrimstr("@") | contains("@")) then sub("@[^
 check 'node is new enough for postgres-mcp' \
 	'NODE_OK' \
 	'node -e "process.exit(+process.versions.node.split(\".\")[0] >= 22 ? 0 : 1)" && echo NODE_OK'
+
+# --- kit content and launch ---------------------------------------------
+# A v3 kit has no files/home injection: the image itself carries the generated
+# role, agents, rules and skills under /home/agent, and sbx keeps the image's
+# home on create. Compared byte for byte against the kit tree, so a stale image
+# fails here. The kit's settings.json is excluded: the plugin install merges
+# its own keys into that file, so it is checked by key below instead.
+KIT_HOME=agent/claude/files/home
+# Kit paths carry no spaces (the generator only emits [a-z0-9-] names), so a
+# plain word list is safe to hand to the in-image shell.
+kit_files="$(cd "$KIT_HOME" && find . -type f ! -name .DS_Store ! -path ./.claude/settings.json | sort | tr '\n' ' ')"
+manifest='for f in '"$kit_files"'; do printf "%s %s\n" "$(cksum <"$f")" "$f"; done'
+check 'kit content is baked into the agent home byte for byte' \
+	"$(cd "$KIT_HOME" && sh -c "$manifest")" \
+	"cd /home/agent && $manifest"
+
+check 'kit settings survive the plugin install' \
+	'{"commit":"","pr":""}' \
+	'node -e "console.log(JSON.stringify(require(\"/home/agent/.claude/settings.json\").attribution))"'
+
+check_config 'agent launches with bypassed permissions' \
+	'[claude --dangerously-skip-permissions]' \
+	'{{.Config.Entrypoint}}'
+
+check_config 'agent launch appends the role prompt' \
+	'[--append-system-prompt-file /home/agent/ROLE.md]' \
+	'{{.Config.Cmd}}'
+
+# The published claude kit's agent-context@1 points at this file; a base that
+# lacks it fails that capability at create.
+check 'image is built on the published claude kit' \
+	'READ_OK' \
+	'test -r /usr/share/sandbox/kit/claude/claude-context.md && echo READ_OK'
 
 # --- docker engine ------------------------------------------------------
 # sbx decides whether to run the sandbox as docker-in-docker by reading this

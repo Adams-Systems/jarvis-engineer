@@ -23,10 +23,18 @@ ARG AGENT=missing
 # exposes the host socket, and images/containers the agent creates live and die
 # with the sandbox.
 #
-# The codex base already carries node, npm and the codex CLI under
+# The claude base is Docker's published v3 Claude kit (sbx v0.51.0 no longer
+# resolves `extends: claude`). It is built on shell-docker, so it carries the
+# docker engine and the start-docker label above, plus go and node. Pinned by
+# index digest: sbx refuses unpinned published kits, and a tag would float.
+# Its descriptor is not inherited by a recipe built FROM it, which is why
+# agent/claude/jarvis-engineer.yaml restates the capabilities it needs.
+#
+# The codex base is Docker's published v3 Codex kit, for the same reason and
+# pinned the same way. It already carries node, npm and the codex CLI under
 # /usr/local/share/npm-global (spike S10).
-FROM docker/sandbox-templates:claude-code-docker AS base-claude
-FROM docker/sandbox-templates:codex-docker AS base-codex
+FROM docker.io/docker/sbx-kit-claude:2.1.267@sha256:f3136cac8739534ba89d2bc0026b4f5dcfc2ca07e17947a9108dc5aabb176522 AS base-claude
+FROM docker.io/docker/sbx-kit-codex:0.155.1@sha256:f808ef79b5aae10dcfd896dc898e16cbfd806bcd16c9699d208ccb99001eaf76 AS base-codex
 
 FROM base-claude AS base-missing
 # The classic builder (DOCKER_BUILDKIT=0) builds every stage up to --target,
@@ -132,6 +140,15 @@ RUN chmod 0644 /usr/local/share/jarvis-engineer/config.json \
   && chmod 0755 /usr/local/bin/install-mcp-packages \
   && install-mcp-packages
 
+# Runtime locations on the kits' volumes (a v3 kit sets environment in the
+# recipe, not the descriptor). Set after every build step so none of them
+# writes into these paths. AI_MEMORY_DATA_DIR moves the memory store off the
+# container's ephemeral filesystem; the Go caches let a recreated sandbox keep
+# downloaded modules and build output.
+ENV AI_MEMORY_DATA_DIR=/var/lib/ai-memory \
+  GOMODCACHE=/var/lib/go/mod \
+  GOCACHE=/var/lib/go/cache
+
 
 FROM common AS claude
 
@@ -140,6 +157,13 @@ FROM common AS claude
 ARG AGENT
 RUN test "${AGENT}" = claude \
   || { echo "target claude needs --build-arg AGENT=claude (got '${AGENT}'); use: make build claude" >&2; exit 1; }
+
+# The kit content generated from shared/ (role, agents, rules, skills, the
+# workflow, the role label and the hand-owned settings.json). A v3 kit has no
+# files/home injection, and sbx keeps the image's home on create, so the image
+# carries it. Copied before the plugin install so that install merges its keys
+# into the kit's settings.json instead of the other way round.
+COPY --chown=1000:1000 agent/claude/files/home/ /home/agent/
 
 # Bake the Claude Code plugins into the template. A sandbox gets a fresh
 # ~/.claude, so plugins installed by hand are gone the next time one is created
@@ -220,6 +244,12 @@ RUN su agent -s /bin/sh -c 'test -x /usr/local/share/ai-memory/hooks/claude-code
 
 USER agent
 
+# sbx launches the agent as the image's Entrypoint + Cmd. The Entrypoint comes
+# from the base (`claude --dangerously-skip-permissions`); the persona is
+# appended here, because a lifecycle@1 `interactive` tail was not applied by
+# sbx v0.51.0 (spike S3).
+CMD ["--append-system-prompt-file", "/home/agent/ROLE.md"]
+
 
 FROM common AS codex
 
@@ -227,6 +257,12 @@ FROM common AS codex
 ARG AGENT
 RUN test "${AGENT}" = codex \
   || { echo "target codex needs --build-arg AGENT=codex (got '${AGENT}'); use: make build codex" >&2; exit 1; }
+
+# The kit content generated from shared/ (AGENTS.md, sub-agents, skills, rules
+# and the role label). A v3 kit has no files/home injection, and sbx keeps the
+# image's home on create, so the image carries it. Copied before the skills
+# install, which adds to ~/.agents/skills.
+COPY --chown=1000:1000 agent/codex/files/home/ /home/agent/
 
 # Re-trusts ai-memory's hooks on every sandbox start (Codex runs untrusted
 # hooks not at all, and sbx recreates ~/.codex). Outside $HOME for the same
@@ -246,3 +282,8 @@ RUN su agent -s /bin/sh -c 'test -x /usr/local/share/ai-memory/hooks/codex/sessi
   && su agent -s /bin/sh -c 'command -v trust-codex-hooks'
 
 USER agent
+
+# sbx launches the agent as the image's Entrypoint + Cmd. The Entrypoint comes
+# from the base (`codex --dangerously-bypass-approvals-and-sandbox`), so it is
+# not repeated; Codex's default model is rejected for ChatGPT-account logins.
+CMD ["--model", "gpt-5.6-terra"]

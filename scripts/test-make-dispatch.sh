@@ -85,26 +85,37 @@ expect "verify-image claude runs the claude script on the claude tag" \
 expect "verify-image codex runs the codex script on the codex tag" \
 	"./scripts/verify-image-codex.sh jarvis-engineer:codex" \
 	"$(dry verify-image codex)"
-expect "template claude builds, verifies, saves and loads the claude image" \
-	"docker image save jarvis-engineer:claude -o" \
+# sbx builds a local v3 kit from its own directory, so template and sandbox
+# stage the kit first and point sbx at the staged directory.
+expect "template claude stages the claude kit" \
+	"./scripts/stage-kit.sh claude" \
 	"$(dry template claude)"
-expect "template claude names its tarball after the agent" \
-	"jarvis-engineer-claude.tar" \
+expect "template claude builds the staged kit through sbx" \
+	"BUILDX_BUILDER=kit-builder sbx kit inspect ./build/kits/jarvis-engineer" \
 	"$(dry template claude)"
 expect "template claude verifies the image it built" \
 	"./scripts/verify-image-claude.sh jarvis-engineer:claude" \
 	"$(dry template claude)"
-expect "sandbox claude recreates the default sandbox from the claude kit" \
-	"sbx create --name jarvis-engineer --env-file .env --kit agent/claude jarvis-engineer ." \
+expect "template no longer loads a tarball" \
+	"NO_TARBALL" \
+	"$(dry template claude | grep -q 'template load' && echo TARBALL || echo NO_TARBALL)"
+expect "sandbox claude creates the kit builder when it is missing" \
+	"docker buildx create --name kit-builder --driver docker-container" \
 	"$(dry sandbox claude)"
+expect "sandbox claude recreates the default sandbox from the staged claude kit" \
+	"BUILDX_BUILDER=kit-builder sbx create --name jarvis-engineer --env-file .env ./build/kits/jarvis-engineer ." \
+	"$(dry sandbox claude)"
+expect "sandbox passes the kit positionally, not with --kit" \
+	"NO_KIT_FLAG" \
+	"$(dry sandbox claude | grep -q -- '--kit' && echo KIT_FLAG || echo NO_KIT_FLAG)"
 expect "sandbox claude verifies the sandbox it created" \
 	"./scripts/verify-sandbox-claude.sh jarvis-engineer" \
 	"$(dry sandbox claude)"
 expect "sandbox codex recreates the codex sandbox from the codex kit" \
-	"sbx create --name jarvis-engineer-codex --env-file .env --kit agent/codex jarvis-engineer-codex ." \
+	"BUILDX_BUILDER=kit-builder sbx create --name jarvis-engineer-codex --env-file .env ./build/kits/jarvis-engineer-codex ." \
 	"$(dry sandbox codex)"
 expect "SANDBOX still overrides the default sandbox name" \
-	"sbx create --name probe --env-file .env --kit agent/codex jarvis-engineer-codex ." \
+	"BUILDX_BUILDER=kit-builder sbx create --name probe --env-file .env ./build/kits/jarvis-engineer-codex ." \
 	"$(dry sandbox codex SANDBOX=probe)"
 expect "SANDBOX override reaches the live verifier" \
 	"./scripts/verify-sandbox-codex.sh probe" \
@@ -123,15 +134,15 @@ expect "verify checks the codex image too" \
 expect "verify runs the dispatch tests" \
 	"./scripts/test-make-dispatch.sh" \
 	"$(dry verify)"
-expect "clean removes both tarballs" \
-	"jarvis-engineer-codex.tar" \
+expect "clean removes the staged kits" \
+	"rm -rf build/kits" \
 	"$(dry clean)"
 expect "sync needs no agent" \
 	"./scripts/sync-agents.sh" \
 	"$(dry sync)"
 
 # --- the Makefile runs these scripts directly, so each must be executable ---
-for script in verify-image-claude verify-image-codex verify-sandbox-claude verify-sandbox-codex; do
+for script in verify-image-claude verify-image-codex verify-sandbox-claude verify-sandbox-codex stage-kit; do
 	# find reads the mode bits; `test -x` also honours ACLs and root.
 	[[ -n "$(find "scripts/$script.sh" -perm -u+x 2>/dev/null)" ]] && mode=executable || mode=not-executable
 	expect "scripts/$script.sh is executable" "mode=executable" "mode=$mode"

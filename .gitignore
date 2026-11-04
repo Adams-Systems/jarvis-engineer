@@ -8,3 +8,4 @@ docs/
 # agent tooling) would otherwise keep them out of the commit and fail
 # sync-agents.sh --check in CI.
 !/agent/codex/files/home/.agents/
+/build/
