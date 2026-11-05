@@ -1,21 +1,19 @@
 {
   "marketplaces": [
-    "anthropics/claude-plugins-official",
-    "mattpocock/skills",
-    "JuliusBrussee/caveman",
-    "blader/humanizer",
-    "docker/skills"
+    "anthropics/claude-plugins-official#fa4eb54397ee2faccb6940512a19c017cb1337f3",
+    "mattpocock/skills#4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
+    "blader/humanizer#0ef9fe5bc3572734fd3ae6c448fe00a30cd5dcf0",
+    "docker/skills#090ff3d39db5f8bc55d4e951c26218e7c95ea2d3"
   ],
   "mcpServers": [
     "@benborla29/mcp-server-mysql@2.0.9",
-    "@microsoft/postgres-mcp"
+    "@microsoft/postgres-mcp@0.3.0"
   ],
   "skills": [
-    "security-audit@cloudflare/security-audit-skill"
+    "security-audit@cloudflare/security-audit-skill#c1c8a8c1471069fb0e188eeaff69b8e8db6564a8"
   ],
   "plugins": [
     "superpowers@claude-plugins-official",
-    "caveman@caveman",
     "humanizer@humanizer",
     "atlassian@claude-plugins-official",
     "docker-skills@docker",

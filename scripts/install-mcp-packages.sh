@@ -7,7 +7,7 @@
 # The config is JSON so it can be edited without touching the Dockerfile:
 #
 #   {
-#     "mcpServers": ["@benborla29/mcp-server-mysql@2.0.9", "@microsoft/postgres-mcp"]
+#     "mcpServers": ["@benborla29/mcp-server-mysql@2.0.9", "@microsoft/postgres-mcp@0.3.0"]
 #   }
 #
 # Each entry is an npm package spec. Pin a release with `@version` for a

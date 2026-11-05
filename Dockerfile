@@ -55,15 +55,15 @@ ARG AI_MEMORY_VERSION=3.1.0
 # architecture, which keeps both amd64 and arm64 templates supported.
 ARG GOLANGCI_LINT_VERSION=2.13.2
 
-# Go tooling installed with `go install`. `latest` because the versions could
-# not be resolved when these were added; pin each to a release (build with
-# --build-arg, or edit here) to make rebuilds reproducible.
-ARG GOVULNCHECK_VERSION=latest
-ARG GOTESTSUM_VERSION=latest
-ARG DELVE_VERSION=latest
-ARG MOCKGEN_VERSION=latest
-ARG SWAG_VERSION=latest
-ARG GOIMPORTS_VERSION=latest
+# Go tooling installed with `go install`, each pinned to a release so rebuilds
+# are reproducible. govulncheck and goimports (x/tools) need Go 1.26, which the
+# base images ship; check the `go` line of a tool's go.mod before bumping it.
+ARG GOVULNCHECK_VERSION=v1.9.0
+ARG GOTESTSUM_VERSION=v1.13.0
+ARG DELVE_VERSION=v1.27.2
+ARG MOCKGEN_VERSION=v0.6.0
+ARG SWAG_VERSION=v1.16.6
+ARG GOIMPORTS_VERSION=v0.52.0
 
 # mise is a build-time tool only: it resolves the correct release asset for the
 # target architecture (these base images are amd64 + arm64) and verifies the
@@ -172,10 +172,9 @@ COPY --chown=1000:1000 agent/claude/files/home/ /home/agent/
 # The list lives in config.json so changing it needs no build flags and no edit
 # here. Editing that file invalidates this layer, so a plain `make build claude`
 # picks the change up; a rebuild with an unchanged config reuses the cached
-# layer and keeps the plugin versions it resolved the first time. There is no
-# version pin to bump the way AI_MEMORY_VERSION is -- the plugin CLI always
-# takes the marketplace's current tip -- so use `docker build --no-cache-filter`
-# on this stage to pull in new releases.
+# layer. Each marketplace in config.json is pinned to a commit with `#<sha>`,
+# and a plugin resolves through its marketplace, so bumping a plugin means
+# bumping that sha (`git ls-remote <repo> HEAD`) and rebuilding.
 #
 # Both files are kept in the image rather than removed after the build: together
 # they are how an agent adds a plugin to, or repairs, its own running sandbox.
@@ -201,7 +200,7 @@ RUN chmod 0755 /usr/local/bin/install-claude-plugins \
 # not plugins, so the plugin CLI does not bring them in: the `skills` CLI installs
 # them into ~/.claude/skills, as the agent for the same reason as the plugins
 # above. The script is kept in the image so an agent can add one to, or repair,
-# its own running sandbox. Like plugins, an entry takes its source's current tip.
+# its own running sandbox. An entry is pinned with `#<sha>` on its source.
 COPY scripts/install-agent-skills.sh /usr/local/bin/install-agent-skills
 RUN chmod 0755 /usr/local/bin/install-agent-skills \
   && su agent -s /bin/sh -c "HOME=/home/agent install-agent-skills claude-code"

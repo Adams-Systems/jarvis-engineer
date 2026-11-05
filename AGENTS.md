@@ -123,13 +123,14 @@ The `common` stage installs, as root:
   last step of the stage so a config edit does not rebuild the toolchain layers. The script runs
   `npm install -g --engine-strict` (a package whose `engines.node` the base does not meet fails the
   build) and then asserts each package is on disk. Today: `@benborla29/mcp-server-mysql@2.0.9` and
-  `@microsoft/postgres-mcp` (unpinned until a release is chosen). Adding a server here only
+  `@microsoft/postgres-mcp@0.3.0`. Adding a server here only
   installs it: registering it with the agent is still a startup step in each kit descriptor
 - `golangci-lint`
 - a C toolchain (`gcc`, `libc6-dev`) with `CGO_ENABLED=1`: Go switches cgo off when it finds no C
   compiler, and `go test -race` needs cgo
 - Go tools on `PATH` via `go install`: `govulncheck`, `gotestsum`, `dlv`, `mockgen`, `swag`,
-  `goimports`. Their version ARGs default to `latest`; pin them to make rebuilds reproducible
+  `goimports`. Their version ARGs are pinned to releases; check a tool's `go.mod` `go` line against the
+  base's Go before bumping one
 - last, `ENV AI_MEMORY_DATA_DIR=/var/lib/ai-memory`, `GOMODCACHE=/var/lib/go/mod` and
   `GOCACHE=/var/lib/go/cache`: a v3 kit sets its environment in the recipe, and setting them after
   the build steps keeps those steps out of the volume paths
@@ -145,7 +146,10 @@ The `claude` stage adds:
 
 - the Claude Code plugins listed in `config.json`, baked via `scripts/install-claude-plugins.sh`,
   run as the `agent` user (uid 1000) so `installPath` entries in the plugin cache are readable by
-  the sandbox's actual runtime user
+  the sandbox's actual runtime user. Each `marketplaces` entry is `owner/repo#<40-hex sha>`: the script
+  adds the marketplace, then checks the sha out in its clone before installing (the CLI takes `#ref` only
+  as a branch or tag), and the marketplace pins its plugins (external plugin sources carry their own
+  `sha`). To upgrade a plugin, bump its marketplace's sha (`git ls-remote <repo> HEAD`) and rebuild
 - a snapshot of the two settings keys that install writes (`enabledPlugins`,
   `extraKnownMarketplaces`) in `/usr/local/share/jarvis-engineer/plugin-settings.json`, and
   `scripts/restore-claude-plugins.sh` as `/usr/local/bin/restore-claude-plugins`. Under the v2 kit
@@ -188,9 +192,9 @@ after use, so a server that ignores SIGTERM cannot hang sandbox startup. Nothing
 e.g. `security-audit@cloudflare/security-audit-skill`. `scripts/install-agent-skills.sh <claude-code|codex>`
 runs `npx -y skills add <source> --skill <skill> -g -a <agent> --copy -y` for each entry, as the `agent`
 user, in the `claude` and `codex` stages, and then asserts that `<dir>/<skill>/SKILL.md` exists
-(`~/.claude/skills` for Claude, `~/.agents/skills` for Codex). There is no version pin: like plugins, an
-entry takes its source's current tip, and an unchanged config reuses the cached layer (use
-`--no-cache-filter` on the stage to pull a newer tip). The `skills` CLI needs Node 22.20 or later. Skills
+(`~/.claude/skills` for Claude, `~/.agents/skills` for Codex). Each source is pinned with
+`#<sha>` (`security-audit@cloudflare/security-audit-skill#<sha>`; the CLI also takes a tag or branch), so
+upgrading a skill means bumping that sha and rebuilding. The `skills` CLI needs Node 22.20 or later. Skills
 this repo writes itself belong in `shared/skills/` instead; the two sets never share a name. The baked
 `~/.claude/skills` survived `sbx create` in the live Claude check. The Codex kit deliberately does not
 restate the published kit's `agent-skills@1`: it mounts the host's shared skills store at
@@ -465,7 +469,6 @@ the targets differ):
   recreate instead.
 - The image `verify-image-*.sh` checks is not the one a sandbox runs. `make build` builds it with
   the local `docker` driver; sbx builds the staged kit again in `kit-builder`, with its own cache,
-  and does not hand that image to the local daemon. Inputs that float (plugins and skills at their
-  source's tip, Go tools and `@microsoft/postgres-mcp` on `latest`) can differ between the two
-  builds. `verify-sandbox-*.sh` checks the sandbox's own image only for what it asserts live.
-  Pinning those inputs closes the gap.
+  and does not hand that image to the local daemon. Every input is pinned now, so the two
+  builds should resolve the same versions. `verify-sandbox-*.sh` checks the sandbox's own image only
+  for what it asserts live.

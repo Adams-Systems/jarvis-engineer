@@ -13,9 +13,10 @@
 # Each entry is skill@source, the way a plugin is plugin@marketplace: the skill
 # name, then where the `skills` CLI fetches it from (a GitHub owner/repo, a URL,
 # a git URL). The split is at the first `@`, so a git@host source still works.
-# There is no version pin: the CLI takes the source's current tip, like the
-# plugin CLI does. Skills this repo writes itself live in shared/skills/ and do
-# not go through here.
+# Pin a skill with `#ref` on the source (a commit sha, tag or branch; the CLI
+# checks it out), e.g. security-audit@cloudflare/security-audit-skill#<sha>.
+# Without one the CLI takes the source's current tip. Skills this repo writes
+# itself live in shared/skills/ and do not go through here.
 #
 # Run at image build time as the agent user, with HOME set: the CLI installs
 # into the user's directory (~/.claude/skills for claude-code, ~/.agents/skills
