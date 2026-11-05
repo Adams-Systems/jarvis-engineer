@@ -284,6 +284,20 @@ check 'every plugin marketplace is declared in user settings' \
 	"$(jq -r '.plugins[] | split("@")[1]' "$CONFIG" | sort -u | paste -sd, -)" \
 	'node -e "const s=require(\"/home/agent/.claude/settings.json\"); console.log(Object.keys(s.extraKnownMarketplaces).sort().join(\",\"))"'
 
+# Nothing floats: every marketplace and skill source in config.json carries a
+# `#ref`, and each marketplace's clone sits on the commit it names. The build
+# applies a sha by checking it out after `marketplace add`, so a rebuild that
+# silently skipped that step would still pass every case above.
+check 'every marketplace and skill source is pinned' \
+	'unpinned=0' \
+	'node -e "const c=require(\"'"$IMAGE_CONFIG"'\"); const u=[...c.marketplaces, ...c.skills.map(e=>e.slice(e.indexOf(\"@\")+1))].filter(e=>!e.includes(\"#\")); console.log(\"unpinned=\"+u.length)"'
+
+while IFS=$'\t' read -r repo sha; do
+	check "marketplace $repo is at its pinned commit" \
+		"$sha" \
+		"git -C \"\$(node -e 'const m=require(\"/home/agent/.claude/plugins/known_marketplaces.json\"); console.log(Object.values(m).find(x=>x.source.repo===\"$repo\").installLocation)')\" rev-parse HEAD"
+done < <(jq -r '.marketplaces[] | select(test("#")) | split("#") | @tsv' "$CONFIG")
+
 # Proves the skills actually landed on disk and are readable at uid 1000, not
 # merely that the installer claimed success.
 # --- plugin settings a sandbox has to restore ---------------------------

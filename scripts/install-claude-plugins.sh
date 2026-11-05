@@ -7,7 +7,7 @@
 # The config is JSON so it can be edited without touching the Dockerfile:
 #
 #   {
-#     "marketplaces": ["anthropics/claude-plugins-official"],
+#     "marketplaces": ["anthropics/claude-plugins-official#<40-hex commit sha>"],
 #     "plugins":      ["superpowers@claude-plugins-official"]
 #   }
 #
@@ -64,8 +64,38 @@ CLAUDE="$HOME/.local/bin/claude"
 # not by the plugin CLI, so in a fresh ~/.claude it is unknown and installs from
 # it fail with "not found in marketplace". Declaring it in `marketplaces` is
 # what makes a build-time install work; it resolves to the same public repo.
-for marketplace in $MARKETPLACES; do
-	"$CLAUDE" plugin marketplace add "$marketplace"
+#
+# An entry is `owner/repo` or `owner/repo#ref`. The CLI clones `#ref` as a
+# branch or tag and rejects a commit sha, so a 40-hex ref is applied here
+# instead: add the marketplace, then check the sha out in its clone before any
+# plugin installs from it. The marketplace pins its plugins in turn: a plugin
+# with an external source carries its own `sha` in marketplace.json, and a
+# relative one comes from the checked-out tree.
+for entry in $MARKETPLACES; do
+	source="${entry%%#*}"
+	ref=""
+	case "$entry" in *#*) ref="${entry#*#}" ;; esac
+
+	if printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
+		"$CLAUDE" plugin marketplace add "$source"
+		dir="$(node -e '
+			const m = require(process.argv[1]);
+			const e = Object.values(m).find(x => x.source && x.source.repo === process.argv[2]);
+			if (!e) process.exit(1);
+			console.log(e.installLocation);
+		' "$HOME/.claude/plugins/known_marketplaces.json" "$source")" || {
+			echo "install-claude-plugins: $source is not registered after marketplace add" >&2
+			exit 1
+		}
+		git -C "$dir" fetch -q origin "$ref"
+		git -C "$dir" checkout -q "$ref"
+		[ "$(git -C "$dir" rev-parse HEAD)" = "$ref" ] || {
+			echo "install-claude-plugins: $source is not at $ref" >&2
+			exit 1
+		}
+	else
+		"$CLAUDE" plugin marketplace add "$entry"
+	fi
 done
 
 # -y is required when stdin is not a TTY and the marketplace declares an install
