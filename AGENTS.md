@@ -54,6 +54,13 @@ Makefile stops at parse time with `usage: make <verb> claude|codex`. Bare `make`
   (`docker-container` driver) when it is missing
 - `make verify-sandbox claude|codex [SANDBOX=name]` — live checks against an already-running sandbox
 - `make clean` — remove the staged kits (`build/kits/`)
+- `scripts/jarvis-sandbox.sh claude|codex [--name N] [--recreate] [--detach] [--dry-run] [workspace]` —
+  the `make sandbox` flow for any other project: stages the kit from this repo, creates
+  `jarvis-engineer-<dir>` (`jarvis-engineer-<dir>-codex` for Codex) with the current directory as the
+  workspace and attaches. An existing sandbox is re-attached, never replaced, unless `--recreate`. Credentials
+  come from this repo's `.env` (or `--env-file` / `$JARVIS_ENV_FILE`). Symlink it onto PATH:
+  `ln -s "$PWD/scripts/jarvis-sandbox.sh" ~/.local/bin/jarvis-sandbox` (macOS does not put `~/.local/bin` on
+  `PATH`; add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zprofile`)
 
 `sandbox` starts with `sbx rm --force` on the target name, so pass a throwaway `SANDBOX=` to check a
 change without replacing a sandbox you work in.
