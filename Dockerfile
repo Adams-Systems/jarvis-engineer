@@ -33,7 +33,7 @@ ARG AGENT=missing
 # The codex base is Docker's published v3 Codex kit, for the same reason and
 # pinned the same way. It already carries node, npm and the codex CLI under
 # /usr/local/share/npm-global (spike S10).
-FROM docker.io/docker/sbx-kit-claude:2.1.267@sha256:f3136cac8739534ba89d2bc0026b4f5dcfc2ca07e17947a9108dc5aabb176522 AS base-claude
+FROM docker.io/docker/sbx-kit-claude:2.1.314@sha256:5698d4430c206770c1243c7ac08a504133b0c31b2ae6ef002efb46653b156b76 AS base-claude
 FROM docker.io/docker/sbx-kit-codex:0.155.1@sha256:f808ef79b5aae10dcfd896dc898e16cbfd806bcd16c9699d208ccb99001eaf76 AS base-codex
 
 FROM base-claude AS base-missing
