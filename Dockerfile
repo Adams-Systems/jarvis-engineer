@@ -34,7 +34,7 @@ ARG AGENT=missing
 # pinned the same way. It already carries node, npm and the codex CLI under
 # /usr/local/share/npm-global (spike S10).
 FROM docker.io/docker/sbx-kit-claude:2.1.267@sha256:f3136cac8739534ba89d2bc0026b4f5dcfc2ca07e17947a9108dc5aabb176522 AS base-claude
-FROM docker.io/docker/sbx-kit-codex:0.155.1@sha256:f808ef79b5aae10dcfd896dc898e16cbfd806bcd16c9699d208ccb99001eaf76 AS base-codex
+FROM docker.io/docker/sbx-kit-codex:0.164.0@sha256:05cf0c1afd39f3d9b77b723472d54af5f9738821ff6ce01eaec8b7596939c44a AS base-codex
 
 FROM base-claude AS base-missing
 # The classic builder (DOCKER_BUILDKIT=0) builds every stage up to --target,
