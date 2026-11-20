@@ -109,7 +109,7 @@ One multi-stage `Dockerfile` builds both images. `ARG AGENT` selects the base:
 `base-codex` its Codex kit `docker.io/docker/sbx-kit-codex:0.155.1`, each pinned by index digest
 (sbx refuses unpinned published kits). Both carry a real nested Docker daemon and the
 `com.docker.sandboxes.start-docker` label, plus go, node and the agent CLI (`claude` in
-`~/.local/bin`, `codex` also under the npm-global prefix), and set the agent's `ENTRYPOINT`. They no
+`~/.local/bin`, `codex` at `/usr/local/bin/codex`, a symlink into `/opt/codex`), and set the agent's `ENTRYPOINT`. They no
 longer share a base: the codex kit is built on `docker/sandbox-templates:shell-docker` (Ubuntu,
 node 22), while the claude kit from 2.1.314 is built on a Docker Hardened Images Debian template
 (node 24, go 1.26.10) that exports `HOME=/home/agent`, which is why the `Dockerfile`'s `common`

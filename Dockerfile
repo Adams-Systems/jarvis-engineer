@@ -31,8 +31,8 @@ ARG AGENT=missing
 # agent/claude/jarvis-engineer.yaml restates the capabilities it needs.
 #
 # The codex base is Docker's published v3 Codex kit, for the same reason and
-# pinned the same way. It already carries node, npm and the codex CLI under
-# /usr/local/share/npm-global (spike S10).
+# pinned the same way. It already carries node, npm and the codex CLI, which
+# lives under /opt/codex and is reached through /usr/local/bin/codex.
 FROM docker.io/docker/sbx-kit-claude:2.1.314@sha256:5698d4430c206770c1243c7ac08a504133b0c31b2ae6ef002efb46653b156b76 AS base-claude
 FROM docker.io/docker/sbx-kit-codex:0.166.0@sha256:179f79321d55be5c826e0aa4531f2389193bcc3f5785ca1c8ddef95d995e7d0c AS base-codex
 
@@ -285,7 +285,7 @@ RUN chmod 0755 /usr/local/bin/install-agent-skills \
 
 # Fail the build rather than ship an image whose Codex-only pieces do not work.
 RUN su agent -s /bin/sh -c 'test -x /usr/local/share/ai-memory/hooks/codex/session-start.sh' \
-  && su agent -s /bin/sh -c '/usr/local/share/npm-global/bin/codex --version' \
+  && su agent -s /bin/sh -c '/usr/local/bin/codex --version' \
   && su agent -s /bin/sh -c 'command -v trust-codex-hooks'
 
 USER agent
