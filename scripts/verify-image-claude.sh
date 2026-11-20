@@ -199,11 +199,13 @@ check_config 'agent launch appends the role prompt' \
 	'[--append-system-prompt-file /home/agent/ROLE.md]' \
 	'{{.Config.Cmd}}'
 
-# The published claude kit's agent-context@1 points at this file; a base that
-# lacks it fails that capability at create.
+# The published kit's descriptor is what agent/claude/jarvis-engineer.yaml is
+# re-copied from when the pin moves. It is the stable marker: from 2.1.314 the
+# kit inlines its agent-context text and no longer ships claude-context.md
+# beside the descriptor.
 check 'image is built on the published claude kit' \
 	'READ_OK' \
-	'test -r /usr/share/sandbox/kit/claude/claude-context.md && echo READ_OK'
+	'test -r /usr/share/sandbox/kit/claude/kit.yaml && echo READ_OK'
 
 # --- docker engine ------------------------------------------------------
 # sbx decides whether to run the sandbox as docker-in-docker by reading this

@@ -5,7 +5,8 @@
 # published Claude kit (see the Dockerfile's base-claude). A recipe built FROM a
 # kit does not inherit its descriptor, so the claude capabilities this kit
 # still needs are restated below, marked "from docker/sbx-kit-claude:2.1.267".
-# Re-copy them from /usr/share/sandbox/kit/claude/kit.yaml when that pin moves.
+# Re-copy them from /usr/share/sandbox/kit/claude/kit.yaml when that pin moves. The image is
+# now on 2.1.314 and these blocks have not been re-synced; see "Kit" in AGENTS.md.
 #
 # This file is hand-owned. `make sandbox claude` stages it, with the Dockerfile
 # and everything that Dockerfile COPYs, into build/kits/jarvis-engineer/ (the
