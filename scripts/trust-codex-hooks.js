@@ -23,7 +23,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 
-const CODEX = process.env.CODEX_BIN || '/usr/local/share/npm-global/bin/codex';
+const CODEX = process.env.CODEX_BIN || '/usr/local/bin/codex';
 const HOME = process.env.HOME;
 const HOOKS_FILE = path.join(HOME, '.codex', 'hooks.json');
 // The whole command, not a prefix: it runs through a shell, so anything after

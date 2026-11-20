@@ -19,7 +19,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 KIT_HOME=agent/codex/files/home
-CODEX=/usr/local/share/npm-global/bin/codex
+CODEX=/usr/local/bin/codex
 
 SANDBOX="${1:-}"
 if [[ -z "$SANDBOX" ]]; then

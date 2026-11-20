@@ -17,8 +17,12 @@ IMAGE="${1:-jarvis-engineer:codex}"
 HOOKS_DIR=/usr/local/share/ai-memory/hooks
 
 # The codex-docker base installs npm globals here (spike S10, same prefix as
-# the Claude image); startup steps call codex by this absolute path.
+# the Claude image); the MCP servers live under it.
 NPM_PREFIX=/usr/local/share/npm-global
+
+# The codex CLI entry point on the published kit (a symlink into /opt/codex);
+# startup steps call codex by this absolute path.
+CODEX=/usr/local/bin/codex
 
 pass=0
 fail=0
@@ -154,7 +158,7 @@ check 'agent can initialise a data directory' \
 #
 # hook_trust_counts: prints trusted=<n> untrusted=<n> as Codex itself reports
 # them, read from the app-server independently of the helper under test.
-hook_trust_counts='(printf "%s\n" "{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"verify\",\"version\":\"0\"}}}" "{\"method\":\"initialized\"}" "{\"id\":2,\"method\":\"hooks/list\",\"params\":{\"cwds\":[\"$HOME\"]}}"; sleep 4) | timeout 20 '"$NPM_PREFIX"'/bin/codex app-server 2>/dev/null | grep "\"id\":2" >/tmp/list.json;
+hook_trust_counts='(printf "%s\n" "{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"verify\",\"version\":\"0\"}}}" "{\"method\":\"initialized\"}" "{\"id\":2,\"method\":\"hooks/list\",\"params\":{\"cwds\":[\"$HOME\"]}}"; sleep 4) | timeout 20 '"$CODEX"' app-server 2>/dev/null | grep "\"id\":2" >/tmp/list.json;
 	 echo "trusted=$(grep -o "\"trustStatus\":\"trusted\"" /tmp/list.json | wc -l | tr -d " ") untrusted=$(grep -o "\"trustStatus\":\"untrusted\"" /tmp/list.json | wc -l | tr -d " ")"'
 
 install_ai_memory_hooks='AI_MEMORY_DATA_DIR=/tmp/v ai-memory init >/dev/null 2>&1;
@@ -291,11 +295,11 @@ check 'node is new enough for postgres-mcp' \
 # kit). Hook trust is per exact handler, so both must be the same binary.
 check 'the absolute codex path startup steps use is the agent PATH codex' \
 	'SAME' \
-	"[ \"\$(readlink -f $NPM_PREFIX/bin/codex)\" = \"\$(readlink -f \"\$(command -v codex)\")\" ] && echo SAME"
+	"[ \"\$(readlink -f $CODEX)\" = \"\$(readlink -f \"\$(command -v codex)\")\" ] && echo SAME"
 
 check 'codex executes as uid 1000' \
 	'codex-cli ' \
-	"$NPM_PREFIX/bin/codex --version"
+	"$CODEX --version"
 
 # --- docker engine ------------------------------------------------------
 check_label 'image opts in to docker-in-docker' \
