@@ -47,6 +47,13 @@ FROM base-${AGENT} AS common
 
 USER root
 
+# Newer claude kit bases export HOME=/home/agent. Left alone, every root step
+# below (npm install -g, go install, mise) would write its cache into the agent's
+# home as root-owned files, and the agent's own `npm` run later in the claude
+# stage fails with EACCES on /home/agent/.npm. Root uses its own home while the
+# image is built; the runtime HOME is restored at the end of this stage.
+ENV HOME=/root
+
 # Pin the release so template rebuilds are reproducible. Bump deliberately.
 ARG AI_MEMORY_VERSION=3.1.0
 
@@ -145,7 +152,8 @@ RUN chmod 0644 /usr/local/share/jarvis-engineer/config.json \
 # writes into these paths. AI_MEMORY_DATA_DIR moves the memory store off the
 # container's ephemeral filesystem; the Go caches let a recreated sandbox keep
 # downloaded modules and build output.
-ENV AI_MEMORY_DATA_DIR=/var/lib/ai-memory \
+ENV HOME=/home/agent \
+  AI_MEMORY_DATA_DIR=/var/lib/ai-memory \
   GOMODCACHE=/var/lib/go/mod \
   GOCACHE=/var/lib/go/cache
 
