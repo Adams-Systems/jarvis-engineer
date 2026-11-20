@@ -105,12 +105,15 @@ kit descriptor.
 ### Image (`Dockerfile`, targets `claude` and `codex`)
 
 One multi-stage `Dockerfile` builds both images. `ARG AGENT` selects the base:
-`base-claude` is Docker's published v3 Claude kit `docker.io/docker/sbx-kit-claude:2.1.267` and
+`base-claude` is Docker's published v3 Claude kit `docker.io/docker/sbx-kit-claude:2.1.314` and
 `base-codex` its Codex kit `docker.io/docker/sbx-kit-codex:0.155.1`, each pinned by index digest
-(sbx refuses unpinned published kits). Both are built on `docker/sandbox-templates:shell-docker`, so
-they carry a real nested Docker daemon and the `com.docker.sandboxes.start-docker` label, plus go,
-node 22 and the agent CLI (`claude` in `~/.local/bin`, `codex` also under the npm-global prefix), and
-set the agent's `ENTRYPOINT`. A recipe built `FROM` a kit does not inherit its descriptor, which is
+(sbx refuses unpinned published kits). Both carry a real nested Docker daemon and the
+`com.docker.sandboxes.start-docker` label, plus go, node and the agent CLI (`claude` in
+`~/.local/bin`, `codex` also under the npm-global prefix), and set the agent's `ENTRYPOINT`. They no
+longer share a base: the codex kit is built on `docker/sandbox-templates:shell-docker` (Ubuntu,
+node 22), while the claude kit from 2.1.314 is built on a Docker Hardened Images Debian template
+(node 24, go 1.26.10) that exports `HOME=/home/agent`, which is why the `Dockerfile`'s `common`
+stage switches `HOME` to `/root` for its root build steps and restores it at the end. A recipe built `FROM` a kit does not inherit its descriptor, which is
 why each kit descriptor restates the capabilities it still needs (see "Kit" below). The `common` stage is `FROM base-${AGENT}`; the `claude` and `codex` stages are
 `FROM common` and add the agent-specific layers. `make build <agent>` passes `--target` and `AGENT`
 together, and each final stage fails if the two disagree. `AGENT` defaults to the sentinel
@@ -215,8 +218,14 @@ built-in agent"), so the kit is no longer a delta on a built-in: its recipe is t
 `Dockerfile`, built `FROM` the published Claude kit, and its descriptor restates what it still
 needs from the published one (marked "from docker/sbx-kit-claude:2.1.267": the network hosts, the
 `anthropic` credential, five `~/.claude` volumes, three install and three startup hooks, and the
-`agent-context@1` guidance in `agent/claude/claude-context.md`). Re-copy those blocks from
-`/usr/share/sandbox/kit/claude/kit.yaml` in the image when the base pin moves. One deliberate
+`agent-context@1` guidance in `agent/claude/claude-context.md`, a repo copy of the text the
+published kit once shipped as a file and, from 2.1.314, inlines in its descriptor). Re-copy those
+blocks from `/usr/share/sandbox/kit/claude/kit.yaml` in the image when the base pin moves. **Not yet
+done for 2.1.314:** the image is on 2.1.314 but these blocks are still the 2.1.267 copies. Upstream
+since added `agent-sessions@1` and `agent-interactive-sessions@1`, the `sbx-claude-hook` binary in its
+hooks and status line, an install hook that creates and chowns `~/.claude` before the settings seed, `model` and `reasoningEffort` kit args
+that its settings hook writes, a shorter network allowlist, and dropped the `console.anthropic.com`
+and `claude.ai` credential injection. Re-sync is a deliberate follow-up, not a marker bump. One deliberate
 change: the published settings hook replaces `~/.claude/settings.json`; ours merges, so the baked
 attribution and plugin keys survive. The orchestrator persona is appended by the image's `Cmd`
 (`--append-system-prompt-file /home/agent/ROLE.md`). The ten sub-agents are Claude Code
@@ -466,8 +475,8 @@ the targets differ):
 - `gpt-5.6-terra` in the `Dockerfile`'s `codex` stage `CMD` is what the current ChatGPT account
   accepts, not a property of the kit; change it there if the account or Codex's model list changes.
 - The restated published capabilities are copies. Bumping a base pin in the `Dockerfile` without
-  re-copying them from the new image's `/usr/share/sandbox/kit/<agent>/kit.yaml` (and
-  `claude-context.md`) leaves the kit on the old hosts and hooks; nothing checks them against the
+  re-copying them from the new image's `/usr/share/sandbox/kit/<agent>/kit.yaml` (and the
+  agent-context text) leaves the kit on the old hosts and hooks; nothing checks them against the
   image.
 - Hook environments are not yet deny-by-default under sbx v0.51.0 (hooks saw undeclared variables),
   so a missing `env:` entry passes every live check today. `verify-kits.sh` checks the declarations
