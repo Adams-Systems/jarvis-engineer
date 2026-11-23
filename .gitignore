@@ -9,3 +9,5 @@ docs/
 # sync-agents.sh --check in CI.
 !/agent/codex/files/home/.agents/
 /build/
+# Reports written by scripts/zap-api-scan.sh.
+/zap-reports/
