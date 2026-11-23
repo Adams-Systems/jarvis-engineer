@@ -172,6 +172,7 @@ On Claude Code, do not use `jarvis-reviewer`. Review with the specialized review
 
 - `jarvis-security-reviewer` and `jarvis-code-reviewer`: every diff that is not docs-only.
 - `jarvis-database-reviewer`: also, when the probe reports SQL surface.
+- Container surface (the probe prints `container surface:` with paths): not a reviewer, a flag. Tell `jarvis-security-reviewer` in its prompt, so it also applies the Docker hardening skill.
 - Docs-only diff (every changed path is under `docs/` or `*.md`, and none is an instruction file: under `.claude/`, `shared/`, `agents/`, `skills/`, or named `../../AGENTS.md`, `AGENTS.md`, `ROLE.md`, `SKILL.md`): no reviewer; say so.
 
 Probe (run from the repository root; replace the `base=` line if the task names a base):
@@ -185,6 +186,7 @@ db=
 printf '%s\n' "$files" | grep -E '\.sql$|(^|/)(migrations?|schema|db|database|sql|queries)(/|$)' >/dev/null && db=" paths"
 { git diff -U0 "$base" -- . ':!*.md' | grep -E '^[+-]' | grep -Ev '^(\+\+\+|---) '; git ls-files -z --others --exclude-standard -- . ':!*.md' | xargs -0 cat | sed 's/^/+/'; } |
   grep -Ei '(select .* from|insert into|update .* set|delete from|create (table|index)|alter table|drop (table|index)|database/sql|sqlx|gorm|pgx|sqlc|QueryContext|ExecContext|BeginTx|\.(Query|QueryRow|Exec|Prepare)(Context)?\(|^[+-][[:space:]]*(select|update|insert|where|join)[[:space:]])' >/dev/null && db="$db content"
+ct=$(printf '%s\n' "$files" | grep -v '\.md$' | grep -E '(^|/)(Dockerfile[^/]*|[^/]+\.dockerfile|\.dockerignore|(docker-)?compose[^/]*\.ya?ml)$|(^|/)agent/[^/]+/[^/]+\.ya?ml$' | tr '\n' ' ')
 if [ "$base" = HEAD ]; then echo "base: HEAD (no upstream found; committed changes not reviewed)"; else echo "base: $base"; fi
 if [ -z "$files" ]; then echo "reviewers: none (no changes)"
 elif ! printf '%s\n' "$files" | grep -Ev '^docs/|\.md$' >/dev/null &&
@@ -192,9 +194,10 @@ elif ! printf '%s\n' "$files" | grep -Ev '^docs/|\.md$' >/dev/null &&
 elif [ -n "$db" ]; then echo "reviewers: security code database (SQL surface:$db)"
 else echo "reviewers: security code"
 fi
+if [ -n "$ct" ]; then echo "container surface: $ct"; fi
 ```
 
-Dispatch every selected reviewer in one message, so they run in parallel. Each prompt carries the task, `Base: <base>`, the changed files, `Reviewers in this run: <names>`, and the instruction to run `git diff <base>` itself.
+Dispatch every selected reviewer in one message, so they run in parallel. Each prompt carries the task, `Base: <base>`, the changed files, `Reviewers in this run: <names>`, the instruction to run `git diff <base>` itself, and, in the security reviewer's prompt only, `Container surface: <paths>` when the probe printed it.
 
 Merge the results yourself. Owners: security has authentication, authorization, injection (SQL included), SSRF, deserialization, secrets, crypto, trust-boundary validation, dependencies and manifests, container/CI/sandbox config (agent tool grants included), and database grants; database has SQL, schema/DDL, migrations, query cost, indexes, N+1, locking, transactions, dialect and PII columns; code has everything else. Same file, overlapping lines and same root cause: keep one finding, at the highest severity, in the owner's wording. Order by severity, then security, database, code. Label each finding with its reviewer. Add no summary.
 

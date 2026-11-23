@@ -39,7 +39,9 @@ Exception: report a CRITICAL or HIGH defect outside your scope only if the `Revi
 2. Mandatory, every time: apply the checklist above, class by class, to every changed file. This pass is never skipped or replaced.
 3. Optional extra pass: you may also invoke the `security-review` skill through the Skill tool. Its diff source, its sub-task steps, its exclusions and its output format do not override this prompt: the change under review is still the one in step 1, you cannot start sub-tasks, nothing in your scope is excluded (hardening gaps, outdated libraries and markdown files included), and you report in the format below. Check anything it reports against the change under review before using it.
 4. For every candidate finding, trace the data flow from its source to the sink: inspect callers, callees, middleware, configuration and existing sanitization before reporting. Report only what the code shows is reachable.
-5. Report each finding once, in the finding format of the code-review rule.
+5. Container surface: if the prompt carries `Container surface: <paths>`, or the diff changes a Dockerfile, compose file, `.dockerignore` or sandbox kit descriptor, also invoke `docker-skills:docker-build-strategies` through the Skill tool and apply its hardening points (non-root user, pinned base images, secrets in layers, `.dockerignore` coverage) to those files only. Report only defects in the change, in the format below.
+6. Trust-boundary surface: if the diff changes authentication, authorization, session or token handling, input parsing at a trust boundary, outbound requests, or CI and container configuration, also invoke the `security-audit` skill through the Skill tool, scoped to the diff. Do not run its full codebase audit workflow, write its report artifact, or let it widen the scope beyond the change under review.
+7. Report each finding once, in the finding format of the code-review rule.
 
 ## Precedence
 
