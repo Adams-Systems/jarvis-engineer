@@ -44,7 +44,9 @@ Makefile stops at parse time with `usage: make <verb> claude|codex`. Bare `make`
 - `make verify-sync` — generator tests, then fail if the committed kit content differs from `shared/`
 - `make verify-make` — tests for the Makefile's agent dispatch (`scripts/test-make-dispatch.sh`); it
   uses `make -n` and stub `docker`/`sbx`, so it needs neither
-- `make verify` — `verify-sync`, `verify-make`, `verify-kits`, then `verify-image` for both agents
+- `make verify-zap` — tests for `scripts/zap-api-scan.sh` (`scripts/test-zap-api-scan.sh`); stub
+  `docker`, so it needs only bash and `make`
+- `make verify` — `verify-sync`, `verify-make`, `verify-zap`, `verify-kits`, then `verify-image` for both agents
 - `make template claude|codex` — build + verify the image, then stage the kit and build it into
   `sbx`'s kit cache (`sbx kit inspect`), so a later `make sandbox` with the same sources skips the build
 - `make sandbox claude|codex [SANDBOX=name]` — stage the agent's kit into `build/kits/<kit-name>/`
@@ -77,6 +79,37 @@ Running the verify scripts directly:
 - `./scripts/sync-agents.sh [--check] [--root DIR]` — needs only bash and POSIX tools
 - `./scripts/test-sync-agents.sh [filter]` — the generator's acceptance tests, same needs
 - `./scripts/test-make-dispatch.sh` — the Makefile dispatch tests, needs only `make` and bash
+- `./scripts/test-zap-api-scan.sh` — the ZAP wrapper's acceptance tests, needs only bash
+- `./scripts/zap-api-scan.sh -t TARGET -f openapi|soap|graphql [options]` — needs `docker` with a
+  reachable daemon. OWASP ZAP API scan (`zaproxy/zap-stable`, version-pinned, override with
+  `ZAP_IMAGE`) against an API running on this machine; writes `report.html` and `report.json` to
+  `./zap-reports/` (git-ignored, `-o` to change). `-h` lists every option. Notes:
+  - Loopback targets only (`localhost`, `127.0.0.1`, `[::1]`); the host is rewritten to
+    `host.docker.internal` for the container. On Linux the API must listen on `0.0.0.0` (or the
+    docker bridge address), not only `127.0.0.1`.
+  - ZAP sends requests to the hosts named inside the definition (OpenAPI `servers[].url`, WSDL
+    `soap:address`), not the host it loaded the definition from. For `-f openapi` the script
+    always passes `-O` (the `-t` origin by default, with a scheme) so no request leaves this
+    machine and the endpoints are really scanned (without `-O` ZAP imports the spec's own hosts
+    and covers almost nothing). A file target needs a loopback `-O host[:port]`. `-f soap` has no
+    override: URL targets only, and the WSDL's `soap:address` decides where requests go (a stderr
+    note says so).
+  - The image is pinned by digest. ZAP still runs its add-on update at startup (network fetch,
+    installs `pscanrulesBeta`); `-z -silent` would stop it but also drops the beta passive rules.
+  - `-S` (the default) only skips ZAP's active scan phase, so no attack payloads are sent. It is not
+    read-only: ZAP's import of the definition still sends one generated request per operation
+    (POST/PUT/DELETE included), so any run can create, modify or delete records. Always scan a
+    disposable database. `--active` adds the attack payloads on top.
+  - A local `-t`/`-c` file is mounted as that single file, read-only (`/zap/spec/<name>`,
+    `/zap/config/<name>`), never its directory. Paths containing `:` are refused (docker `-v`).
+  - Linux: the image runs as fixed uid 1000 and `--user` breaks ZAP (it fails to start under another
+    uid, even with `HOME` set), so the script does not use it. If your uid is not 1000, make the out
+    dir writable first (`chmod a+w DIR` or `chown 1000 DIR`); otherwise the scan runs and then fails
+    with `Permission denied: '/zap/wrk/report.html'`. Docker Desktop is not affected.
+  - Exit 0-3 are ZAP's (0 pass, 1 FAIL, 2 WARN, 3 other). Every alert is a WARN by default, so a
+    first run normally exits 2; `--no-fail-on-warn` or `-c` changes that. The wrapper's own errors
+    are 64 (bad input), 66 (missing file), 69 (no docker or daemon).
+  - Not run in CI. The stub tests cannot show that ZAP reaches the host API; that needs a live run.
 - `./scripts/verify-sandbox-claude.sh <sandbox-name>` / `./scripts/verify-sandbox-codex.sh <sandbox-name>`
   — need a live `sbx` sandbox and `sbx exec`
 

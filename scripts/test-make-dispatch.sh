@@ -134,6 +134,9 @@ expect "verify checks the codex image too" \
 expect "verify runs the dispatch tests" \
 	"./scripts/test-make-dispatch.sh" \
 	"$(dry verify)"
+expect "verify runs the zap script tests" \
+	"./scripts/test-zap-api-scan.sh" \
+	"$(dry verify)"
 expect "clean removes the staged kits" \
 	"rm -rf build/kits" \
 	"$(dry clean)"
@@ -142,7 +145,7 @@ expect "sync needs no agent" \
 	"$(dry sync)"
 
 # --- the Makefile runs these scripts directly, so each must be executable ---
-for script in verify-image-claude verify-image-codex verify-sandbox-claude verify-sandbox-codex stage-kit; do
+for script in verify-image-claude verify-image-codex verify-sandbox-claude verify-sandbox-codex stage-kit zap-api-scan test-zap-api-scan; do
 	# find reads the mode bits; `test -x` also honours ACLs and root.
 	[[ -n "$(find "scripts/$script.sh" -perm -u+x 2>/dev/null)" ]] && mode=executable || mode=not-executable
 	expect "scripts/$script.sh is executable" "mode=executable" "mode=$mode"
