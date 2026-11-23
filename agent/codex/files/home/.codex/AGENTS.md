@@ -173,5 +173,5 @@ The rules are not loaded into your own context. When you edit code yourself, fir
 - `code-review`: Review Criteria (`/home/agent/.jarvis/rules/code-review.md`)
 - `code-style`: Code style and architecture (`/home/agent/.jarvis/rules/code-style.md`)
 - `conventional-commit`: Git Commit with Conventional Commits (`/home/agent/.jarvis/rules/conventional-commit.md`)
-- `golang-idioms`: Golang idioms (`/home/agent/.jarvis/rules/golang-idioms.md`)
+- `golang-idioms`: Go idioms and conventions (`/home/agent/.jarvis/rules/golang-idioms.md`)
 - `testing`: TDD Rules (`/home/agent/.jarvis/rules/testing.md`)
