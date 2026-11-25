@@ -280,8 +280,9 @@ build_docker_args() {
 	[[ "$no_fail_on_warn" -eq 0 ]] || docker_args+=(-I)
 	[[ -z "$config_arg" ]] || docker_args+=(-c "$config_arg")
 	[[ -z "$override_arg" ]] || docker_args+=(-O "$override_arg")
-	# ${arr[@]+...} keeps an empty array legal under `set -u` on bash 3.2.
-	docker_args+=(${extra[@]+"${extra[@]}"})
+	if [[ ${#extra[@]} -gt 0 ]]; then
+		docker_args+=("${extra[@]}")
+	fi
 }
 
 main() {
