@@ -16,6 +16,7 @@ repo="$(pwd)"
 script="$repo/scripts/zap-api-scan.sh"
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/zap-api-scan.XXXXXX")"
+work="$(cd "$work" && pwd)"
 trap 'rm -rf "$work"' EXIT
 
 mkdir "$work/bin" "$work/empty" "$work/fixtures"
@@ -28,6 +29,7 @@ info)
 	;;
 run)
 	echo "$*" >>"$STUB_LOG"
+	[ -z "${STUB_RUN_ARGS:-}" ] || printf '%s\n' "$@" >"$STUB_RUN_ARGS"
 	exit "${STUB_EXIT:-0}"
 	;;
 esac
@@ -64,7 +66,8 @@ zap() {
 	fi
 	cwd="$(cd "$cwd" && pwd)"
 	: >"$work/calls"
-	out="$(cd "$cwd" && STUB_LOG="$work/calls" PATH="$work/bin:$PATH" /bin/bash "$script" "$@" 2>&1)"
+	: >"$work/run_args"
+	out="$(cd "$cwd" && STUB_LOG="$work/calls" STUB_RUN_ARGS="$work/run_args" PATH="$work/bin:$PATH" /bin/bash "$script" "$@" 2>&1)"
 	status=$?
 	calls="$(cat "$work/calls")"
 }
@@ -291,6 +294,15 @@ expect "a nested out dir is created" "dir=yes" "dir=$([[ -d "$cwd/reports/nested
 
 zap -t http://localhost:8080/openapi.json -f openapi -- -d -D 5
 expect "arguments after -- reach ZAP last" "-J report.json -S -O http://host.docker.internal:8080 -d -D 5" "$(run_call)"
+
+zap -t http://localhost:8080/openapi.json -f openapi -- -z "-config key=val with spaces" "*"
+expect "extra arguments with spaces are preserved intact as single elements" "ARG_FOUND" \
+	"$(grep -Fxq -- '-config key=val with spaces' "$work/run_args" && echo ARG_FOUND || echo ARG_MISSING)"
+expect "extra arguments with spaces are not word-split" "ARG_ABSENT" \
+	"$(grep -Fxq -- '-config' "$work/run_args" && echo ARG_FOUND || echo ARG_ABSENT)"
+expect "wildcard arguments are preserved intact without pathname expansion" "ARG_FOUND" \
+	"$(grep -Fxq -- '*' "$work/run_args" && echo ARG_FOUND || echo ARG_MISSING)"
+expect "wildcard argument reaches docker run without globbing" " *" "$(run_call)"
 
 ZAP_IMAGE=example.test/zap:custom zap -t http://localhost:8080/openapi.json -f openapi
 expect "ZAP_IMAGE overrides the pinned image" " example.test/zap:custom zap-api-scan.py" "$(run_call)"
