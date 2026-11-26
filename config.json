@@ -3,7 +3,8 @@
     "anthropics/claude-plugins-official#fa4eb54397ee2faccb6940512a19c017cb1337f3",
     "mattpocock/skills#4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
     "blader/humanizer#0ef9fe5bc3572734fd3ae6c448fe00a30cd5dcf0",
-    "docker/skills#090ff3d39db5f8bc55d4e951c26218e7c95ea2d3"
+    "docker/skills#090ff3d39db5f8bc55d4e951c26218e7c95ea2d3",
+    "aws/agent-toolkit-for-aws#e62ada690e3adf340a4cccb3b20204721e4b54d2"
   ],
   "mcpServers": [
     "@benborla29/mcp-server-mysql@2.0.9",
@@ -17,6 +18,10 @@
     "humanizer@humanizer",
     "atlassian@claude-plugins-official",
     "docker-skills@docker",
-    "aws-core@claude-plugins-official"
+    "aws-core@claude-plugins-official",
+    "aws-agents@agent-toolkit-for-aws",
+    "aws-data-analytics@agent-toolkit-for-aws",
+    "aws-agents-for-devsecops@agent-toolkit-for-aws",
+    "aws-continuum@agent-toolkit-for-aws"
   ]
 }
