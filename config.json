@@ -5,6 +5,7 @@
     "blader/humanizer#0ef9fe5bc3572734fd3ae6c448fe00a30cd5dcf0",
     "docker/skills#090ff3d39db5f8bc55d4e951c26218e7c95ea2d3",
     "microsoft/azure-skills#7847020998043c6231929b364c35393b7cdab270",
+    "grafana/skills#8fb72a527961f05e708f53d2a0500709e12d7970",
     "aws/agent-toolkit-for-aws#e62ada690e3adf340a4cccb3b20204721e4b54d2"
   ],
   "mcpServers": [
@@ -21,6 +22,13 @@
     "docker-skills@docker",
     "aws-core@claude-plugins-official",
     "azure@azure-skills",
+    "grafana-core@grafana-skills",
+    "grafana-cloud@grafana-skills",
+    "grafana-lgtm@grafana-skills",
+    "grafana-plugins@grafana-skills",
+    "grafana-app-sdk@grafana-skills",
+    "grafana-k6@grafana-skills",
+    "grafana-datasources@grafana-skills",
     "aws-agents@agent-toolkit-for-aws",
     "aws-data-analytics@agent-toolkit-for-aws",
     "aws-agents-for-devsecops@agent-toolkit-for-aws",
