@@ -277,6 +277,14 @@ check 'plugin cache is recorded under the agent home' \
 	'"installPath": "/home/agent/.claude/plugins/cache' \
 	'claude plugin list --json | grep installPath'
 
+# The azure plugin's SessionStart/PostToolUse hooks download a telemetry reporter
+# from a GitHub release (github.com is allowlisted) and run it unless this is
+# exactly false; it also switches off the Azure MCP server's telemetry. Opt out
+# explicitly.
+check 'azure plugin telemetry is switched off in the agent environment' \
+	'AZURE_MCP_COLLECT_TELEMETRY=false' \
+	'env | grep ^AZURE_MCP_COLLECT_TELEMETRY='
+
 # The cache is only half the state: without the marketplace declared in user
 # settings, Claude Code cannot refresh or re-resolve the plugin at runtime.
 # Derived from the plugin ids rather than from `.marketplaces`: a marketplace's

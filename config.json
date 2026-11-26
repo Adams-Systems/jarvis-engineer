@@ -4,6 +4,7 @@
     "mattpocock/skills#4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
     "blader/humanizer#0ef9fe5bc3572734fd3ae6c448fe00a30cd5dcf0",
     "docker/skills#090ff3d39db5f8bc55d4e951c26218e7c95ea2d3",
+    "microsoft/azure-skills#7847020998043c6231929b364c35393b7cdab270",
     "aws/agent-toolkit-for-aws#e62ada690e3adf340a4cccb3b20204721e4b54d2"
   ],
   "mcpServers": [
@@ -19,6 +20,7 @@
     "atlassian@claude-plugins-official",
     "docker-skills@docker",
     "aws-core@claude-plugins-official",
+    "azure@azure-skills",
     "aws-agents@agent-toolkit-for-aws",
     "aws-data-analytics@agent-toolkit-for-aws",
     "aws-agents-for-devsecops@agent-toolkit-for-aws",

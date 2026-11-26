@@ -116,6 +116,10 @@ check 'go caches are on the persistent volume and writable' \
 	'/var/lib/go/mod agent:agent' \
 	'echo "$GOMODCACHE $(stat -c %U:%G /var/lib/go)"'
 
+check 'azure plugin telemetry is switched off in the sandbox' \
+	'AZURE_MCP_COLLECT_TELEMETRY=false' \
+	'env | grep ^AZURE_MCP_COLLECT_TELEMETRY='
+
 check 'go race detector prerequisites are present' \
 	'CGO=1' \
 	'command -v gcc >/dev/null && echo CGO=$(go env CGO_ENABLED)'

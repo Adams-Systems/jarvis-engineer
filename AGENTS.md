@@ -230,7 +230,11 @@ The `common` stage installs, as root:
   install
 - last, `ENV AI_MEMORY_DATA_DIR=/var/lib/ai-memory`, `GOMODCACHE=/var/lib/go/mod` and
   `GOCACHE=/var/lib/go/cache`: a v3 kit sets its environment in the recipe, and setting them after
-  the build steps keeps those steps out of the volume paths
+  the build steps keeps those steps out of the volume paths. The same block sets
+  `AZURE_MCP_COLLECT_TELEMETRY=false`: the azure plugin's SessionStart/PostToolUse hooks download a
+  telemetry reporter from a GitHub release (github.com is allowlisted) and run it unless this is
+  exactly false; it also switches off the Azure MCP server's telemetry. Opt out explicitly, like
+  postgres-mcp's `--no-telemetry`
 
 The `claude` stage adds:
 

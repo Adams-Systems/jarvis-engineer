@@ -162,11 +162,16 @@ RUN chmod 0755 /usr/local/bin/zap-api-scan \
 # recipe, not the descriptor). Set after every build step so none of them
 # writes into these paths. AI_MEMORY_DATA_DIR moves the memory store off the
 # container's ephemeral filesystem; the Go caches let a recreated sandbox keep
-# downloaded modules and build output.
+# downloaded modules and build output. AZURE_MCP_COLLECT_TELEMETRY=false: the
+# azure plugin's SessionStart/PostToolUse hooks download a telemetry reporter
+# from a GitHub release (github.com is allowlisted) and run it unless this is
+# exactly false; it also switches off the Azure MCP server's telemetry. Opt out
+# explicitly.
 ENV HOME=/home/agent \
   AI_MEMORY_DATA_DIR=/var/lib/ai-memory \
   GOMODCACHE=/var/lib/go/mod \
-  GOCACHE=/var/lib/go/cache
+  GOCACHE=/var/lib/go/cache \
+  AZURE_MCP_COLLECT_TELEMETRY=false
 
 
 FROM common AS claude
