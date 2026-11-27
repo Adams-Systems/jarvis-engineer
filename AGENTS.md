@@ -45,8 +45,10 @@ Makefile stops at parse time with `usage: make <verb> claude|codex`. Bare `make`
 - `make verify-make` — tests for the Makefile's agent dispatch (`scripts/test-make-dispatch.sh`); it
   uses `make -n` and stub `docker`/`sbx`, so it needs neither
 - `make verify-zap` — tests for `scripts/zap-api-scan.sh` (`scripts/test-zap-api-scan.sh`); stub
-  `docker`, so it needs only bash and `make`
-- `make verify` — `verify-sync`, `verify-make`, `verify-zap`, `verify-kits`, then `verify-image` for both agents
+  `curl`/`sleep`, needs bash, `make` and `jq`
+- `make verify-launcher` — tests for `scripts/jarvis-sandbox.sh` (`scripts/test-jarvis-sandbox.sh`); stub
+  `sbx`/`docker` and `--dry-run`, so no sandbox is created (the kit is staged into `build/kits/`)
+- `make verify` — `verify-sync`, `verify-make`, `verify-zap`, `verify-launcher`, `verify-kits`, then `verify-image` for both agents
 - `make template claude|codex` — build + verify the image, then stage the kit and build it into
   `sbx`'s kit cache (`sbx kit inspect`), so a later `make sandbox` with the same sources skips the build
 - `make sandbox claude|codex [SANDBOX=name]` — stage the agent's kit into `build/kits/<kit-name>/`
@@ -56,11 +58,14 @@ Makefile stops at parse time with `usage: make <verb> claude|codex`. Bare `make`
   (`docker-container` driver) when it is missing
 - `make verify-sandbox claude|codex [SANDBOX=name]` — live checks against an already-running sandbox
 - `make clean` — remove the staged kits (`build/kits/`)
-- `scripts/jarvis-sandbox.sh claude|codex [--name N] [--recreate] [--detach] [--dry-run] [workspace]` —
+- `scripts/jarvis-sandbox.sh claude|codex [--name N] [--recreate] [--detach] [--publish PORT] [--dry-run] [workspace]` —
   the `make sandbox` flow for any other project: stages the kit from this repo, creates
   `jarvis-engineer-<dir>` (`jarvis-engineer-<dir>-codex` for Codex) with the current directory as the
   workspace and attaches. An existing sandbox is re-attached, never replaced, unless `--recreate`. Credentials
-  come from this repo's `.env` (or `--env-file` / `$JARVIS_ENV_FILE`). Symlink it onto PATH:
+  come from this repo's `.env` (or `--env-file` / `$JARVIS_ENV_FILE`). `--publish PORT|HOST:PORT`
+  (repeatable; `PORT` means `PORT:PORT`) runs `sbx port publish` right after `sbx create`, so the
+  host's ZAP daemon can reach an API in the sandbox; it is ignored, with a note, when re-attaching to
+  an existing sandbox. Symlink it onto PATH:
   `ln -s "$PWD/scripts/jarvis-sandbox.sh" ~/.local/bin/jarvis-sandbox` (macOS does not put `~/.local/bin` on
   `PATH`; add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zprofile`)
 
@@ -79,43 +84,38 @@ Running the verify scripts directly:
 - `./scripts/sync-agents.sh [--check] [--root DIR]` — needs only bash and POSIX tools
 - `./scripts/test-sync-agents.sh [filter]` — the generator's acceptance tests, same needs
 - `./scripts/test-make-dispatch.sh` — the Makefile dispatch tests, needs only `make` and bash
-- `./scripts/test-zap-api-scan.sh` — the ZAP wrapper's acceptance tests, needs only bash
-- `./scripts/zap-api-scan.sh -t TARGET -f openapi|soap|graphql [options]` — needs `docker` with a
-  reachable daemon. OWASP ZAP API scan (`zaproxy/zap-stable`, version-pinned, override with
-  `ZAP_IMAGE`) against an API running on this machine; writes `report.html` and `report.json` to
-  `./zap-reports/` (git-ignored, `-o` to change). `-h` lists every option. Notes:
-  - Loopback targets only (`localhost`, `127.0.0.1`, `[::1]`); the host is rewritten to
-    `host.docker.internal` for the container. On Linux the API must listen on `0.0.0.0` (or the
-    docker bridge address), not only `127.0.0.1`.
-  - ZAP sends requests to the hosts named inside the definition (OpenAPI `servers[].url`, WSDL
-    `soap:address`), not the host it loaded the definition from. For `-f openapi` the script
-    always passes `-O` (the `-t` origin by default, with a scheme) so no request leaves this
-    machine and the endpoints are really scanned (without `-O` ZAP imports the spec's own hosts
-    and covers almost nothing). A file target needs a loopback `-O host[:port]`. `-f soap` has no
-    override: URL targets only, and the WSDL's `soap:address` decides where requests go (a stderr
-    note says so).
-  - The image is pinned by digest. ZAP still runs its add-on update at startup (network fetch,
-    installs `pscanrulesBeta`); `-z -silent` would stop it but also drops the beta passive rules.
-  - `-S` (the default) only skips ZAP's active scan phase, so no attack payloads are sent. It is not
-    read-only: ZAP's import of the definition still sends one generated request per operation
-    (POST/PUT/DELETE included), so any run can create, modify or delete records. Always scan a
-    disposable database. `--active` adds the attack payloads on top.
-  - A local `-t`/`-c` file is mounted as that single file, read-only (`/zap/spec/<name>`,
-    `/zap/config/<name>`), never its directory. Paths containing `:` are refused (docker `-v`).
-  - Linux: the image runs as fixed uid 1000 and `--user` breaks ZAP (it fails to start under another
-    uid, even with `HOME` set), so the script does not use it. If your uid is not 1000, make the out
-    dir writable first (`chmod a+w DIR` or `chown 1000 DIR`); otherwise the scan runs and then fails
-    with `Permission denied: '/zap/wrk/report.html'`. Docker Desktop is not affected.
-  - Exit 0-3 are ZAP's (0 pass, 1 FAIL, 2 WARN, 3 other). Every alert is a WARN by default, so a
-    first run normally exits 2; `--no-fail-on-warn` or `-c` changes that. The wrapper's own errors
-    are 64 (bad input), 66 (missing file), 69 (no docker or daemon).
-  - Not run in CI. The stub tests cannot show that ZAP reaches the host API; that needs a live run.
+- `./scripts/test-zap-api-scan.sh` — the ZAP client's acceptance tests, needs bash and `jq`
+- `./scripts/test-jarvis-sandbox.sh` — the launcher's acceptance tests, needs only bash and POSIX tools
+- `./scripts/zap-api-scan.sh -t TARGET -f openapi|graphql [options]` — needs `curl` and `jq`. A
+  REST client of the OWASP ZAP daemon that runs on the user's host (see "ZAP host daemon" below):
+  it imports the API definition into ZAP, waits for the scans, and writes `report.html` and
+  `report.json` for that one site to `./zap-reports/` (git-ignored, `-o` to change). `-h` lists every
+  option. Both images install it as `/usr/local/bin/zap-api-scan` (common stage), and the shared
+  `zap-api-scan` skill tells an agent how to start the current project's API, run it, and verify the
+  alerts. Nothing in the review fan-out runs it: the reviewers stay read-only, so a scan runs only
+  when asked. Notes:
+  - `-t` is the sandbox's own view, loopback only (`localhost`, `127.0.0.1`, `[::1]`); ZAP is given
+    `http://$ZAP_TARGET_HOST:<host port>` with the definition's hosts overridden, so every request
+    lands on the published API. `--host-port` (default: the port in `-t`; required for a file target;
+    80 and 443 refused until S3) names the host port. The API must listen on `0.0.0.0`.
+  - Options: `--active`, `--no-fail-on-warn`, `-c` (upstream's rules format, read locally),
+    `--host-port`, `--timeout MIN`, `--header-env VAR` (a `Name: value` header added through a
+    site-scoped replacer rule; the value never reaches argv or output). SOAP is refused (exit 64,
+    ADR F3); `-O`, `-g` and `-- ZAP_ARGS` are gone.
+  - It writes on every run: importing the definition sends one generated request per operation
+    (POST/PUT/DELETE included). Always scan a disposable database. `--active` adds attack payloads.
+  - Exit codes: 0-3 computed by the script from the site's alerts (0 pass, 1 a FAIL, 2 a WARN and no
+    FAIL, 3 no usable result); 64 bad input; 66 missing file; 69 `curl`/`jq` missing or the daemon
+    unreachable or rejecting; 78 ZAP not configured (skipped, never a pass). Every alert is a WARN by
+    default, so a first run normally exits 2.
+  - Not run in CI. The stub tests cannot show that ZAP reaches the host API; that needs a live run
+    (S1-S3 below).
 - `./scripts/verify-sandbox-claude.sh <sandbox-name>` / `./scripts/verify-sandbox-codex.sh <sandbox-name>`
   — need a live `sbx` sandbox and `sbx exec`
 
 `.dockerignore` excludes `scripts/` and then re-includes only the scripts the images install
 (`install-agent-skills.sh`, `install-claude-plugins.sh`, `install-mcp-packages.sh`, `restore-claude-plugins.sh`, `jarvis-statusline.sh`,
-`trust-codex-hooks.js`); a new script the `Dockerfile` `COPY`s fails the build with "not found" until it
+`trust-codex-hooks.js`, `zap-api-scan.sh`); a new script the `Dockerfile` `COPY`s fails the build with "not found" until it
 is listed there too. `scripts/stage-kit.sh` reads the same list to decide which scripts go into a
 staged kit, so it is the one place to add one. `**/.DS_Store` is excluded because the images `COPY`
 the kit homes.
@@ -132,6 +132,58 @@ modules it can also hold `GOPRIVATE` (and `GONOSUMDB`/`GOFLAGS` if needed) and `
 environment, so the token is never written to `~/.gitconfig`. It is only ever
 passed with `--env-file .env` at `sbx create` time — never baked into the image or written into a
 kit descriptor.
+
+`ZAP_URL`, `ZAP_API_KEY` and the optional `ZAP_TARGET_HOST` configure `zap-api-scan` the same way
+(see "ZAP host daemon"): passed only with `--env-file` at create time, never baked in, so a sandbox
+must be recreated to pick up a change. There is no `.env.example`.
+
+### ZAP host daemon
+
+Design: `docs/architecture/zap-host-service.md`. ZAP runs once, on the user's host, as a daemon that
+every sandbox shares; `zap-api-scan` drives it over REST. The host setup commands (key, daemon
+`docker run` with the pinned digest, `.env` lines) live in `shared/skills/zap-api-scan/SKILL.md`,
+section "Host setup", because agents in other projects cannot read this file.
+
+- Variables: `ZAP_URL` (`http`/`https`, host `host.docker.internal`, `localhost`, `127.0.0.1` or
+  `[::1]`, no path, no user info), `ZAP_API_KEY` (non-empty; sent only as the `X-ZAP-API-Key`
+  header from a private header file, never `?apikey=`), `ZAP_TARGET_HOST` (`host.docker.internal`
+  by default, `localhost` or `127.0.0.1`: the name ZAP uses to reach host-published ports). Every
+  ZAP call also sends `Host: zap`, because ZAP answers its API only for that host or its own
+  listen address.
+- Not configured: `ZAP_URL` unset or empty prints one stderr line and exits 78, with no network
+  call and no out dir. An invalid `ZAP_URL`, a missing key or a bad `ZAP_TARGET_HOST` also exit 78,
+  each with its own message. 78 is a skip, never a pass.
+- Shared daemon: results are kept apart by site (`ZAP_TARGET_HOST:<host port>`): the script
+  deletes, scans and reports only that site, removes its own replacer rule and site results at exit,
+  and never calls `newSession`, `loadSession`, `setMode`, an option setter or a policy change.
+  Two scans of the same site at once are unsupported (the second deletes the first one's results).
+  The passive queue and the default active policy are shared, and the daemon's transfer dir keeps
+  every uploaded spec and report.
+- **F1, accepted risk.** Anyone holding `ZAP_API_KEY` in any sandbox can make the host's ZAP send
+  HTTP requests from the host, past the sandbox's network allowlist: to the host's own localhost
+  services, the LAN and cloud metadata endpoints. The script's loopback check restricts the script,
+  not the key. The user accepted this; the daemon may run long-term, and there is no further
+  mitigation. `.env` is the only place the key lives.
+- SOAP is refused (exit 64): ZAP has no host override for a WSDL, so requests would go to the
+  `soap:address` host from the host's network (ADR F3).
+- Ports: ZAP reaches the API only through a host-published port. Create the sandbox with
+  `scripts/jarvis-sandbox.sh ... --publish PORT`, or have the user run the exact
+  `sbx port publish <sandbox> P:<port>` line the script prints on exit 3. `sbx run --publish` is
+  ignored when re-attaching.
+- Live spikes, user-run (this environment has no `sbx`):
+  - **S1**, from inside a sandbox, from the agent's own Bash tool (not only `sbx exec`):
+    `curl -sS -H 'Host: zap' -H "X-ZAP-API-Key: $ZAP_API_KEY" "$ZAP_URL/JSON/core/view/version/"`.
+    Pass: JSON with a version. Record (a) whether `host.docker.internal` alone is enough or
+    `localhost:8090` must be added to both kits' allowlists, (b) whether the proxy keeps
+    `Host: zap` (retry with `--noproxy host.docker.internal` if not; the fix then goes into
+    `zap_request`), (c) whether the `X-ZAP-API-Key` header survives, and that `ZAP_URL`/`ZAP_API_KEY`
+    are in that shell's environment.
+  - **S2**, daemon in Docker Desktop on macOS, API in a sandbox created with `--publish 8080`:
+    `zap-api-scan -t http://localhost:8080/openapi.json -f openapi`. Pass: the API's own log shows
+    ZAP's requests and `report.json` has `site[]` for `host.docker.internal:8080`. Capture the real
+    report and replace the hand-built test fixture.
+  - **S3**, API on host port 80 or 443 (`--host-port`): checks the explicit-default-port site match
+    and `sites=SITE`. Until it passes, 80 and 443 stay refused.
 
 ## Architecture
 
@@ -174,6 +226,8 @@ The `common` stage installs, as root:
 - Go tools on `PATH` via `go install`: `govulncheck`, `gotestsum`, `dlv`, `mockgen`, `swag`,
   `goimports`. Their version ARGs are pinned to releases; check a tool's `go.mod` `go` line against the
   base's Go before bumping one
+- `jq` (apt) and the `zap-api-scan` ZAP REST client (`/usr/local/bin/zap-api-scan`), after the MCP
+  install
 - last, `ENV AI_MEMORY_DATA_DIR=/var/lib/ai-memory`, `GOMODCACHE=/var/lib/go/mod` and
   `GOCACHE=/var/lib/go/cache`: a v3 kit sets its environment in the recipe, and setting them after
   the build steps keeps those steps out of the volume paths
@@ -516,6 +570,12 @@ the targets differ):
   statically.
 - `sbx kit add` cannot add mixins to a v3 sandbox (Docker's "Use kits" docs); change the kit and
   recreate instead.
+- ZAP host daemon: S1-S3 (see "ZAP host daemon") are unverified, so the sbx proxy's handling of
+  `Host: zap` and the key header, the allowlist form (a contingent `localhost:8090` rule in both
+  kits) and Docker Desktop reaching sandbox-published ports are known only from the docs. The
+  `report.json` fixture in `scripts/test-zap-api-scan.sh` is hand-built, not a captured report.
+  Whether `sbx create` has its own `--publish` is unverified (`jarvis-sandbox.sh` uses
+  `sbx port publish` after create). F1 is an accepted risk, not a fixed one.
 - The image `verify-image-*.sh` checks is not the one a sandbox runs. `make build` builds it with
   the local `docker` driver; sbx builds the staged kit again in `kit-builder`, with its own cache,
   and does not hand that image to the local daemon. Every input is pinned now, so the two

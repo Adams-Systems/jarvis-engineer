@@ -14,5 +14,6 @@ scripts
 !scripts/restore-claude-plugins.sh
 !scripts/jarvis-statusline.sh
 !scripts/trust-codex-hooks.js
+!scripts/zap-api-scan.sh
 config
 **/.DS_Store

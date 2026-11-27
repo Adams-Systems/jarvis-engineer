@@ -133,7 +133,7 @@ RUN su agent -s /bin/sh -c 'ai-memory --version' | grep -q "ai-memory ${AI_MEMOR
   && command -v dockerd >/dev/null \
   && id -nG agent | grep -qw docker
 
-# Install the MCP servers listed in config.json. Last in this stage on purpose:
+# Install the MCP servers listed in config.json. After the toolchain on purpose:
 # editing the file invalidates the layers after the COPY, so keeping them at the
 # end means a config change reinstalls only these packages, not the toolchain
 # above. Globally, so `npx -y` in a kit's startup step resolves them without a
@@ -146,6 +146,17 @@ COPY scripts/install-mcp-packages.sh /usr/local/bin/install-mcp-packages
 RUN chmod 0644 /usr/local/share/jarvis-engineer/config.json \
   && chmod 0755 /usr/local/bin/install-mcp-packages \
   && install-mcp-packages
+
+# A ZAP REST client; ZAP itself runs on the user's host (see the zap-api-scan
+# skill). Needs `curl` and `jq`. After the MCP install so an edit to the script
+# rebuilds only these layers, not the Go tools above.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends jq \
+  && rm -rf /var/lib/apt/lists/*
+COPY scripts/zap-api-scan.sh /usr/local/bin/zap-api-scan
+RUN chmod 0755 /usr/local/bin/zap-api-scan \
+  && command -v jq \
+  && command -v curl
 
 # Runtime locations on the kits' volumes (a v3 kit sets environment in the
 # recipe, not the descriptor). Set after every build step so none of them
