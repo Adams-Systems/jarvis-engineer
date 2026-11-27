@@ -38,7 +38,7 @@ SANDBOX ?= $(SANDBOX_$(AGENT))
 KIT_DIR     := ./build/kits/$(KIT_NAME_$(AGENT))
 KIT_BUILDER := kit-builder
 
-.PHONY: help claude codex build template verify-image sandbox verify-sandbox sync verify verify-sync verify-make verify-zap verify-kits clean
+.PHONY: help claude codex build template verify-image sandbox verify-sandbox sync verify verify-sync verify-make verify-zap verify-launcher verify-kits clean
 
 ## help: list the targets
 help:
@@ -76,8 +76,8 @@ sandbox:
 sync:
 	./scripts/sync-agents.sh
 
-## verify: static checks (sync, dispatch, zap script, kits, both images). Use verify-sandbox <agent> for the live ones.
-verify: verify-sync verify-make verify-zap verify-kits
+## verify: static checks (sync, dispatch, zap script, launcher, kits, both images). Use verify-sandbox <agent> for the live ones.
+verify: verify-sync verify-make verify-zap verify-launcher verify-kits
 	for agent in $(AGENTS); do $(MAKE) verify-image $$agent || exit 1; done
 
 ## verify-sync: generator tests, then fail if the committed kit content drifted from shared/
@@ -89,9 +89,13 @@ verify-sync:
 verify-make:
 	./scripts/test-make-dispatch.sh
 
-## verify-zap: tests for scripts/zap-api-scan.sh (stub docker, no scan runs)
+## verify-zap: tests for scripts/zap-api-scan.sh (stub curl, no ZAP runs; needs jq)
 verify-zap:
 	./scripts/test-zap-api-scan.sh
+
+## verify-launcher: tests for scripts/jarvis-sandbox.sh (stub sbx, no sandbox is created)
+verify-launcher:
+	./scripts/test-jarvis-sandbox.sh
 
 ## verify-image <agent>: static acceptance checks against the built image
 verify-image:

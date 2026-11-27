@@ -254,6 +254,32 @@ check 'install-agent-skills rejects an unknown agent' \
 	'usage: install-agent-skills' \
 	'install-agent-skills nobody 2>&1'
 
+check 'zap-api-scan resolves on the agent PATH' \
+	'/usr/local/bin/zap-api-scan' \
+	'command -v zap-api-scan'
+
+check 'zap-api-scan prints its usage' \
+	'Usage: zap-api-scan.sh -t TARGET' \
+	'zap-api-scan -h'
+
+# zap-api-scan is a REST client of the host's ZAP daemon: it needs curl and jq,
+# and without ZAP_URL it skips with exit 78 and makes no network call.
+check 'jq resolves and runs on the agent PATH' \
+	'jq-' \
+	'jq --version'
+
+check 'curl resolves and runs on the agent PATH' \
+	'curl ' \
+	'curl --version'
+
+check 'zap-api-scan without ZAP_URL exits 78' \
+	'exit=78' \
+	'env -u ZAP_URL zap-api-scan -t http://localhost:1/x -f openapi 2>&1; echo "exit=$?"'
+
+check 'zap-api-scan without ZAP_URL says ZAP is not configured' \
+	'ZAP is not configured' \
+	'env -u ZAP_URL zap-api-scan -t http://localhost:1/x -f openapi 2>&1; echo "exit=$?"'
+
 # --- tools --------------------------------------------------------------
 check 'golangci-lint is the pinned version' \
 	"version $GOLANGCI_LINT_VERSION" \

@@ -18,6 +18,10 @@
 #                     repo, or $JARVIS_ENV_FILE)
 #   --recreate        remove an existing sandbox of that name first
 #   --detach          create without attaching
+#   --publish PORT|HOST:PORT   publish a sandbox port on the host's loopback at
+#                     create time (repeatable). PORT means PORT:PORT; needed
+#                     for zap-api-scan so ZAP can reach the API. Ignored when
+#                     re-attaching to an existing sandbox
 #   --dry-run         print the commands instead of running them
 #
 # Put it on PATH once, from anywhere:
@@ -53,6 +57,21 @@ recreate=0
 detach=0
 dry=0
 workspace=''
+publish_specs=()
+
+# publish_spec <value> -- prints the value as HOST_PORT:SANDBOX_PORT, or fails.
+# Only PORT and HOST:PORT: no HOST_IP (the binding stays loopback), no protocol
+# (tcp4), no bare ephemeral host port (the host port must be known to scan).
+publish_spec() {
+	local host_port sandbox_port n
+	[[ "$1" =~ ^([0-9]+)(:([0-9]+))?$ ]] || return 1
+	host_port="${BASH_REMATCH[1]}"
+	sandbox_port="${BASH_REMATCH[3]:-$host_port}"
+	for n in "$host_port" "$sandbox_port"; do
+		[[ ${#n} -le 5 ]] && ((10#$n >= 1 && 10#$n <= 65535)) || return 1
+	done
+	printf '%d:%d\n' "$((10#$host_port))" "$((10#$sandbox_port))"
+}
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -68,6 +87,15 @@ while [[ $# -gt 0 ]]; do
 	--env-file)
 		[[ $# -ge 2 ]] || usage
 		env_file="$2"
+		shift
+		;;
+	--publish)
+		[[ $# -ge 2 ]] || usage
+		spec="$(publish_spec "$2")" || {
+			echo "jarvis-sandbox: invalid --publish value: $2" >&2
+			usage
+		}
+		publish_specs+=("$spec")
 		shift
 		;;
 	--recreate) recreate=1 ;;
@@ -125,6 +153,9 @@ fi
 if sbx ls -q 2>/dev/null | grep -Fxq "$name"; then
 	if [[ $recreate -eq 0 ]]; then
 		echo "jarvis-sandbox: $name exists; attaching (--recreate to replace it)" >&2
+		if [[ ${#publish_specs[@]} -gt 0 ]]; then
+			echo "jarvis-sandbox: --publish ignored: $name exists; run sbx port publish $name ${publish_specs[*]} or use --recreate" >&2
+		fi
 		[[ $detach -eq 1 ]] && exit 0
 		run sbx run --name "$name"
 		exit 0
@@ -142,4 +173,12 @@ docker buildx inspect "$KIT_BUILDER" >/dev/null 2>&1 ||
 	run docker buildx create --name "$KIT_BUILDER" --driver docker-container --bootstrap
 
 run env BUILDX_BUILDER="$KIT_BUILDER" sbx create --name "$name" ${env_args[@]+"${env_args[@]}"} "$kit_dir" "$workspace"
+# sbx port publish is documented after create; whether sbx create takes a
+# --publish of its own is unverified.
+if [[ ${#publish_specs[@]} -gt 0 ]]; then
+	run sbx port publish "$name" "${publish_specs[@]}" || {
+		echo "jarvis-sandbox: $name was created but publishing failed; run: sbx port publish $name ${publish_specs[*]}" >&2
+		exit 1
+	}
+fi
 [[ $detach -eq 1 ]] || run sbx run --name "$name"
